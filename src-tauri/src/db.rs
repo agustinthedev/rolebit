@@ -444,6 +444,7 @@ impl Database {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn finish_query_execution(
         &self,
         execution_id: i64,
@@ -462,6 +463,7 @@ impl Database {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_failed_discovery(
         &self,
         run_id: i64,

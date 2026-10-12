@@ -166,13 +166,12 @@ fn find_job_posting(value: &Value) -> Option<&Value> {
     if value.get("@type").and_then(Value::as_str) == Some("JobPosting") {
         return Some(value);
     }
-    if let Some(graph) = value.get("@graph").and_then(Value::as_array) {
-        if let Some(posting) = graph
+    if let Some(graph) = value.get("@graph").and_then(Value::as_array)
+        && let Some(posting) = graph
             .iter()
             .find(|item| item.get("@type").and_then(Value::as_str) == Some("JobPosting"))
-        {
-            return Some(posting);
-        }
+    {
+        return Some(posting);
     }
     value
         .as_array()?

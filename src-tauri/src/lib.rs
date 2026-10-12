@@ -37,10 +37,10 @@ pub fn run() {
             app.manage(state.clone());
             build_tray(app)?;
             start_scheduler(app.handle().clone(), state);
-            if std::env::args().any(|arg| arg == "--from-autostart") {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.hide();
-                }
+            if std::env::args().any(|arg| arg == "--from-autostart")
+                && let Some(window) = app.get_webview_window("main")
+            {
+                let _ = window.hide();
             }
             Ok(())
         })

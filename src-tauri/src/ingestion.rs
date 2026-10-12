@@ -107,13 +107,13 @@ pub fn try_start_ingestion(app: AppHandle, state: AppState, trigger: &str) -> Re
         return Err("No valid enabled search combinations are configured".into());
     }
     let planned_requests = queries.len() * configuration.pages_per_query.max(1) as usize;
-    if let Some(budget) = settings.request_budget {
-        if planned_requests > budget as usize {
-            state.release_run();
-            return Err(format!(
-                "This run plans {planned_requests} requests, above the configured budget of {budget}"
-            ));
-        }
+    if let Some(budget) = settings.request_budget
+        && planned_requests > budget as usize
+    {
+        state.release_run();
+        return Err(format!(
+            "This run plans {planned_requests} requests, above the configured budget of {budget}"
+        ));
     }
     let estimated_cost = settings
         .estimated_cost_per_request
@@ -185,7 +185,7 @@ async fn execute(
     let total = queries.len();
     emit_progress(&app, run_id, "running", None, total, &counters);
 
-    stream::iter(queries.into_iter())
+    stream::iter(queries)
         .for_each_concurrent(settings.request_concurrency.max(1) as usize, |query| {
             let app = app.clone();
             let state = state.clone();
@@ -248,49 +248,7 @@ async fn execute(
     emit_progress(&app, run_id, status, None, total, &counters);
 }
 
-#[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use super::*;
-
-    fn state(name: &str) -> (AppState, std::path::PathBuf) {
-        let directory = std::env::temp_dir().join(format!(
-            "rolebit-ingestion-{name}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&directory).unwrap();
-        let database = Database::initialize(directory.join("rolebit.sqlite3")).unwrap();
-        (AppState::new(database), directory)
-    }
-
-    #[test]
-    fn prevents_overlapping_runs_and_releases_the_guard() {
-        let (state, directory) = state("overlap");
-        assert!(state.try_acquire_run().is_ok());
-        assert!(state.try_acquire_run().is_err());
-        state.release_run();
-        assert!(state.try_acquire_run().is_ok());
-        drop(state);
-        fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn cancellation_is_shared_across_state_clones() {
-        let (state, directory) = state("cancel");
-        let worker = state.clone();
-        state.cancel();
-        assert!(worker.cancel.load(Ordering::SeqCst));
-        drop(worker);
-        drop(state);
-        fs::remove_dir_all(directory).unwrap();
-    }
-}
-
+#[allow(clippy::too_many_arguments)]
 async fn process_query(
     state: &AppState,
     run_id: i64,
@@ -437,4 +395,47 @@ fn emit_progress(
             errors: counters.errors.load(Ordering::SeqCst),
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    fn state(name: &str) -> (AppState, std::path::PathBuf) {
+        let directory = std::env::temp_dir().join(format!(
+            "rolebit-ingestion-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let database = Database::initialize(directory.join("rolebit.sqlite3")).unwrap();
+        (AppState::new(database), directory)
+    }
+
+    #[test]
+    fn prevents_overlapping_runs_and_releases_the_guard() {
+        let (state, directory) = state("overlap");
+        assert!(state.try_acquire_run().is_ok());
+        assert!(state.try_acquire_run().is_err());
+        state.release_run();
+        assert!(state.try_acquire_run().is_ok());
+        drop(state);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn cancellation_is_shared_across_state_clones() {
+        let (state, directory) = state("cancel");
+        let worker = state.clone();
+        state.cancel();
+        assert!(worker.cancel.load(Ordering::SeqCst));
+        drop(worker);
+        drop(state);
+        fs::remove_dir_all(directory).unwrap();
+    }
 }
