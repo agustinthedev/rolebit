@@ -1,6 +1,6 @@
 use keyring::Entry;
 
-const SERVICE: &str = "com.rolebit.app";
+const SERVICE: &str = "com.rolebit.desktop";
 const BRIGHT_DATA_KEY: &str = "bright-data-api-key";
 
 fn entry() -> Result<Entry, String> {

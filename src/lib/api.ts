@@ -51,7 +51,7 @@ let demoSettings: AppSettings = {
   closeToTray: true,
   lastScheduledRunAt: hoursAgo(7),
   hasApiKey: false,
-  databasePath: "C:\\Users\\You\\AppData\\Roaming\\com.rolebit.app\\rolebit.sqlite3",
+  databasePath: "C:\\Users\\You\\AppData\\Roaming\\com.rolebit.desktop\\rolebit.sqlite3",
   appVersion: "0.1.0",
 };
 
