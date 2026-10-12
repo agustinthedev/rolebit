@@ -218,4 +218,27 @@ mod tests {
     fn treats_empty_results_as_success() {
         assert!(parse_serp_response(r#"{"organic":[]}"#).unwrap().is_empty());
     }
+
+    #[test]
+    fn builds_distinct_mock_pages_without_paid_requests() {
+        let query = r#"site:jobs.example.com "Remote" "QA Engineer""#;
+        assert_eq!(mock_results(query, 1).len(), 1);
+        assert!(mock_results(query, 2).is_empty());
+    }
+
+    #[test]
+    fn encodes_google_query_components() {
+        assert_eq!(
+            encode_component(r#"site:example.com "QA & SDET""#),
+            "site%3Aexample.com+%22QA+%26+SDET%22"
+        );
+    }
+
+    #[test]
+    fn retries_rate_limits_and_server_errors_only() {
+        assert!(retryable(StatusCode::TOO_MANY_REQUESTS));
+        assert!(retryable(StatusCode::BAD_GATEWAY));
+        assert!(!retryable(StatusCode::BAD_REQUEST));
+        assert!(!retryable(StatusCode::UNAUTHORIZED));
+    }
 }
