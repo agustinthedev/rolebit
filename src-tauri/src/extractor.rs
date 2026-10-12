@@ -1,6 +1,6 @@
 use std::{net::IpAddr, time::Duration};
 
-use reqwest::{Client, redirect::Policy};
+use reqwest::{Client, header::LOCATION, redirect::Policy};
 use scraper::{Html, Selector};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -10,19 +10,40 @@ use url::Url;
 use crate::{models::CandidateJob, provider::quoted_terms};
 
 pub async fn fetch_and_extract(url: &str, timeout_seconds: u32) -> Result<CandidateJob, String> {
-    validate_public_url(url).await?;
     let client = Client::builder()
         .timeout(Duration::from_secs(timeout_seconds as u64))
-        .redirect(Policy::limited(5))
+        .redirect(Policy::none())
         .user_agent("Mozilla/5.0 (compatible; Rolebit/0.1; job discovery)")
         .build()
         .map_err(|error| error.to_string())?;
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|error| format!("Job page request failed: {error}"))?;
-    validate_public_url(response.url().as_str()).await?;
+    let mut current_url = Url::parse(url).map_err(|_| "Invalid candidate URL".to_string())?;
+    let mut response = None;
+    for redirect_count in 0..=5 {
+        validate_public_url(current_url.as_str()).await?;
+        let current_response = client
+            .get(current_url.clone())
+            .send()
+            .await
+            .map_err(|error| format!("Job page request failed: {error}"))?;
+        if current_response.status().is_redirection() {
+            if redirect_count == 5 {
+                return Err("Job page exceeded the redirect limit".into());
+            }
+            let location = current_response
+                .headers()
+                .get(LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| "Job page redirect has no valid location".to_string())?;
+            current_url = current_url
+                .join(location)
+                .map_err(|_| "Job page redirect location is invalid".to_string())?;
+            continue;
+        }
+        response = Some(current_response);
+        break;
+    }
+    let response =
+        response.ok_or_else(|| "Job page did not return a final response".to_string())?;
     if !response.status().is_success() {
         return Err(format!("Job page returned {}", response.status()));
     }
@@ -34,7 +55,7 @@ pub async fn fetch_and_extract(url: &str, timeout_seconds: u32) -> Result<Candid
     if !content_type.contains("html") && !content_type.is_empty() {
         return Err(format!("Unsupported job page content type: {content_type}"));
     }
-    let final_url = response.url().to_string();
+    let final_url = current_url.to_string();
     let html = response.text().await.map_err(|error| error.to_string())?;
     extract_job(&html, &final_url)
 }
@@ -382,5 +403,16 @@ mod tests {
     fn rejects_pages_without_job_content() {
         let html = "<html><head><title>Home</title></head><body>Hello</body></html>";
         assert!(extract_job(html, "https://example.com").is_err());
+    }
+
+    #[test]
+    fn falls_back_to_semantic_html_and_normalizes_the_canonical_url() {
+        let html = r#"<html><head><link rel="canonical" href="/jobs/42?utm_campaign=hiring"><meta property="og:title" content="Platform Engineer"></head><body><div class="company">Orbitline</div><div class="location">Montevideo · Hybrid</div><main class="job-description">Build reliable distributed services with the product team. Improve delivery pipelines, observability, testing, and operational resilience while collaborating across engineering and design.</main></body></html>"#;
+        let job = extract_job(html, "https://jobs.example.com/openings/42").unwrap();
+        assert_eq!(job.title, "Platform Engineer");
+        assert_eq!(job.company.as_deref(), Some("Orbitline"));
+        assert_eq!(job.remote_status, "hybrid");
+        assert_eq!(job.canonical_url, "https://jobs.example.com/jobs/42");
+        assert_eq!(job.extraction_status, "html_fallback");
     }
 }
