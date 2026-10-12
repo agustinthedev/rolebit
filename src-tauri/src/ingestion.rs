@@ -37,6 +37,18 @@ impl AppState {
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
     }
+
+    fn try_acquire_run(&self) -> Result<(), String> {
+        self.running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map(|_| ())
+            .map_err(|_| "An ingestion run is already in progress".into())
+    }
+
+    fn release_run(&self) {
+        self.running.store(false, Ordering::SeqCst);
+    }
+
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::SeqCst);
     }
@@ -74,36 +86,30 @@ struct Counters {
 }
 
 pub fn try_start_ingestion(app: AppHandle, state: AppState, trigger: &str) -> Result<i64, String> {
-    if state
-        .running
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return Err("An ingestion run is already in progress".into());
-    }
+    state.try_acquire_run()?;
     let configuration = match state.db.get_configuration() {
         Ok(value) => value,
         Err(error) => {
-            state.running.store(false, Ordering::SeqCst);
+            state.release_run();
             return Err(error);
         }
     };
     let settings = match current_settings(&state) {
         Ok(value) => value,
         Err(error) => {
-            state.running.store(false, Ordering::SeqCst);
+            state.release_run();
             return Err(error);
         }
     };
     let queries = generate_queries(&configuration);
     if queries.is_empty() {
-        state.running.store(false, Ordering::SeqCst);
+        state.release_run();
         return Err("No valid enabled search combinations are configured".into());
     }
     let planned_requests = queries.len() * configuration.pages_per_query.max(1) as usize;
     if let Some(budget) = settings.request_budget {
         if planned_requests > budget as usize {
-            state.running.store(false, Ordering::SeqCst);
+            state.release_run();
             return Err(format!(
                 "This run plans {planned_requests} requests, above the configured budget of {budget}"
             ));
@@ -115,7 +121,7 @@ pub fn try_start_ingestion(app: AppHandle, state: AppState, trigger: &str) -> Re
     let run_id = match state.db.start_run(trigger, queries.len(), estimated_cost) {
         Ok(id) => id,
         Err(error) => {
-            state.running.store(false, Ordering::SeqCst);
+            state.release_run();
             return Err(error);
         }
     };
@@ -238,8 +244,51 @@ async fn execute(
     };
     let error = (errors > 0).then(|| format!("{errors} query executions encountered errors"));
     let _ = state.db.finish_run(run_id, status, error.as_deref());
-    state.running.store(false, Ordering::SeqCst);
+    state.release_run();
     emit_progress(&app, run_id, status, None, total, &counters);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    fn state(name: &str) -> (AppState, std::path::PathBuf) {
+        let directory = std::env::temp_dir().join(format!(
+            "rolebit-ingestion-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let database = Database::initialize(directory.join("rolebit.sqlite3")).unwrap();
+        (AppState::new(database), directory)
+    }
+
+    #[test]
+    fn prevents_overlapping_runs_and_releases_the_guard() {
+        let (state, directory) = state("overlap");
+        assert!(state.try_acquire_run().is_ok());
+        assert!(state.try_acquire_run().is_err());
+        state.release_run();
+        assert!(state.try_acquire_run().is_ok());
+        drop(state);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn cancellation_is_shared_across_state_clones() {
+        let (state, directory) = state("cancel");
+        let worker = state.clone();
+        state.cancel();
+        assert!(worker.cancel.load(Ordering::SeqCst));
+        drop(worker);
+        drop(state);
+        fs::remove_dir_all(directory).unwrap();
+    }
 }
 
 async fn process_query(
@@ -261,6 +310,7 @@ async fn process_query(
         if state.cancel.load(Ordering::SeqCst) {
             break;
         }
+        state.db.record_request_attempt(run_id)?;
         let results = match provider.search(query, page).await {
             Ok(results) => results,
             Err(error) => {

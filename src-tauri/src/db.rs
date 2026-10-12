@@ -2,7 +2,8 @@ use std::{fs, path::PathBuf};
 
 use chrono::{Duration, Utc};
 use rusqlite::{
-    Connection, OptionalExtension, Row, Transaction, params, params_from_iter, types::Value,
+    Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params, params_from_iter,
+    types::Value,
 };
 use sha2::{Digest, Sha256};
 
@@ -429,13 +430,18 @@ impl Database {
             "INSERT INTO query_executions(run_id, query_id, status, started_at) VALUES(?1, ?2, 'running', ?3)",
             params![run_id, query_id, timestamp],
         ).map_err(|error| error.to_string())?;
+        Ok(connection.last_insert_rowid())
+    }
+
+    pub fn record_request_attempt(&self, run_id: i64) -> Result<(), String> {
+        let connection = self.connect()?;
         connection
             .execute(
                 "UPDATE ingestion_runs SET attempted_requests=attempted_requests+1 WHERE id=?1",
                 [run_id],
             )
             .map_err(|error| error.to_string())?;
-        Ok(connection.last_insert_rowid())
+        Ok(())
     }
 
     pub fn finish_query_execution(
@@ -472,13 +478,15 @@ impl Database {
              VALUES(?1, ?2, ?3, ?4, ?5, ?6, 'extraction_failed', ?7, ?8)",
             params![run_id, execution_id, provider, url, title, snippet, error, now()],
         ).map_err(|db_error| db_error.to_string())?;
-        let discovery_id = connection.last_insert_rowid();
-        if discovery_id > 0 {
-            connection.execute(
-                "INSERT INTO extraction_attempts(discovery_id, status, strategy, error, attempted_at) VALUES(?1, 'failed', 'automatic', ?2, ?3)",
-                params![discovery_id, error, now()],
-            ).map_err(|db_error| db_error.to_string())?;
-        }
+        let discovery_id: i64 = connection.query_row(
+            "SELECT id FROM discovery_results WHERE run_id=?1 AND query_execution_id=?2 AND discovered_url=?3",
+            params![run_id, execution_id, url],
+            |row| row.get(0),
+        ).map_err(|db_error| db_error.to_string())?;
+        connection.execute(
+            "INSERT INTO extraction_attempts(discovery_id, status, strategy, error, attempted_at) VALUES(?1, 'failed', 'automatic', ?2, ?3)",
+            params![discovery_id, error, now()],
+        ).map_err(|db_error| db_error.to_string())?;
         connection
             .execute(
                 "UPDATE ingestion_runs SET extraction_failures=extraction_failures+1 WHERE id=?1",
@@ -499,7 +507,7 @@ impl Database {
     ) -> Result<UpsertOutcome, String> {
         let mut connection = self.connect()?;
         let transaction = connection
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
         let timestamp = now();
         transaction.execute(
@@ -644,10 +652,8 @@ impl Database {
             &connection,
             "SELECT COUNT(*) FROM jobs WHERE content_updated=1",
         )?;
-        let active_queries = count(
-            &connection,
-            "SELECT COUNT(*) FROM search_queries WHERE active=1",
-        )?;
+        let active_queries =
+            crate::query::generate_queries(&self.get_configuration()?).len() as i64;
         let latest_run = latest_run(&connection)?;
         let last_ingestion_at = latest_run.as_ref().and_then(|run| run.completed_at.clone());
         let ingestion_status = latest_run
@@ -1176,4 +1182,215 @@ fn distinct_strings(connection: &Connection, sql: &str) -> Result<Vec<String>, S
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, sync::Arc, thread};
+
+    use super::*;
+
+    fn test_database(name: &str) -> (Database, PathBuf) {
+        let directory = std::env::temp_dir().join(format!(
+            "rolebit-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let database = Database::initialize(directory.join("rolebit.sqlite3")).unwrap();
+        (database, directory)
+    }
+
+    fn candidate(description: &str) -> CandidateJob {
+        CandidateJob {
+            source_url: "https://jobs.example.com/roles/quality-42?utm_source=search".into(),
+            canonical_url: "https://jobs.example.com/roles/quality-42".into(),
+            external_id: Some("quality-42".into()),
+            source_domain: "jobs.example.com".into(),
+            title: "Senior Quality Engineer".into(),
+            company: Some("Example Labs".into()),
+            description: Some(description.into()),
+            location: Some("Remote".into()),
+            remote_status: "remote".into(),
+            employment_type: Some("Full-time".into()),
+            published_at: Some("2026-10-01".into()),
+            expires_at: None,
+            extraction_status: "json_ld".into(),
+        }
+    }
+
+    fn request() -> JobListRequest {
+        JobListRequest {
+            search: None,
+            location: None,
+            remote_status: None,
+            source: None,
+            lifecycle_status: None,
+            tracking_status: None,
+            discovered_after: None,
+            sort: "newest".into(),
+            page: 1,
+            page_size: 25,
+        }
+    }
+
+    #[test]
+    fn migrates_and_persists_default_configuration() {
+        let (database, directory) = test_database("migrations");
+        let configuration = database.get_configuration().unwrap();
+        assert_eq!(configuration.sites.len(), 3);
+        assert_eq!(crate::query::generate_queries(&configuration).len(), 60);
+        assert_eq!(database.diagnostics("test").unwrap().schema_version, 1);
+        drop(database);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn upserts_revisions_without_overwriting_tracking_state() {
+        let (database, directory) = test_database("upsert");
+        let run_id = database.start_run("test", 2, None).unwrap();
+        let first_execution = database
+            .start_query_execution(run_id, "first query")
+            .unwrap();
+        let first = database
+            .record_candidate(
+                run_id,
+                first_execution,
+                "mock",
+                None,
+                None,
+                &candidate("Original description"),
+            )
+            .unwrap();
+        assert_eq!(first, UpsertOutcome::New);
+        let page = database.list_jobs(&request()).unwrap();
+        let job_id = page.items[0].id;
+        database.update_tracking_status(job_id, "saved").unwrap();
+
+        let second_execution = database
+            .start_query_execution(run_id, "second query")
+            .unwrap();
+        let updated = database
+            .record_candidate(
+                run_id,
+                second_execution,
+                "mock",
+                None,
+                None,
+                &candidate("Meaningfully changed description"),
+            )
+            .unwrap();
+        assert_eq!(updated, UpsertOutcome::Updated);
+        let detail = database.get_job(job_id).unwrap();
+        assert_eq!(detail.summary.tracking_status, "saved");
+        assert!(detail.summary.content_updated);
+        assert_eq!(detail.discoveries.len(), 2);
+
+        let unchanged = database
+            .record_candidate(
+                run_id,
+                second_execution,
+                "mock",
+                None,
+                None,
+                &candidate("Meaningfully changed description"),
+            )
+            .unwrap();
+        assert_eq!(unchanged, UpsertOutcome::Existing);
+        assert_eq!(database.list_jobs(&request()).unwrap().total, 1);
+        drop(database);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn searches_filters_and_paginates_in_sqlite() {
+        let (database, directory) = test_database("listing");
+        let run_id = database.start_run("test", 1, None).unwrap();
+        let execution = database
+            .start_query_execution(run_id, "quality query")
+            .unwrap();
+        database
+            .record_candidate(
+                run_id,
+                execution,
+                "mock",
+                None,
+                None,
+                &candidate("Build excellent testing systems"),
+            )
+            .unwrap();
+        let mut filtered = request();
+        filtered.search = Some("testing systems".into());
+        filtered.remote_status = Some("remote".into());
+        assert_eq!(database.list_jobs(&filtered).unwrap().total, 1);
+        filtered.location = Some("Nowhere".into());
+        assert_eq!(database.list_jobs(&filtered).unwrap().total, 0);
+        drop(database);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn serializes_concurrent_discovery_into_one_job() {
+        let (database, directory) = test_database("concurrent");
+        let run_id = database.start_run("test", 2, None).unwrap();
+        let first_execution = database
+            .start_query_execution(run_id, "remote quality")
+            .unwrap();
+        let second_execution = database
+            .start_query_execution(run_id, "latam quality")
+            .unwrap();
+        let database = Arc::new(database);
+        let handles = [first_execution, second_execution].map(|execution| {
+            let database = database.clone();
+            thread::spawn(move || {
+                database.record_candidate(
+                    run_id,
+                    execution,
+                    "mock",
+                    None,
+                    None,
+                    &candidate("Concurrent description"),
+                )
+            })
+        });
+        let outcomes = handles.map(|handle| handle.join().unwrap().unwrap());
+        assert!(outcomes.contains(&UpsertOutcome::New));
+        assert!(outcomes.contains(&UpsertOutcome::Existing));
+        assert_eq!(database.list_jobs(&request()).unwrap().total, 1);
+        drop(database);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn schedules_one_missed_run_and_waits_for_the_next_interval() {
+        let (database, directory) = test_database("schedule");
+        {
+            let connection = database.connect().unwrap();
+            set_setting(&connection, "schedule_enabled", "true").unwrap();
+            set_setting(&connection, "schedule_interval_hours", "12").unwrap();
+        }
+        assert!(database.schedule_due().unwrap());
+        database.set_last_scheduled_run().unwrap();
+        assert!(!database.schedule_due().unwrap());
+        drop(database);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn recovers_interrupted_runs_and_query_executions() {
+        let (database, directory) = test_database("recovery");
+        let run_id = database.start_run("scheduled", 1, None).unwrap();
+        database
+            .start_query_execution(run_id, "site:example.com remote qa")
+            .unwrap();
+        database.recover_interrupted_runs().unwrap();
+        let run = database.list_runs(10).unwrap().remove(0);
+        assert_eq!(run.status, "interrupted");
+        assert!(run.completed_at.is_some());
+        drop(database);
+        fs::remove_dir_all(directory).unwrap();
+    }
 }
