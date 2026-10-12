@@ -1290,6 +1290,13 @@ mod tests {
         assert_eq!(detail.summary.tracking_status, "saved");
         assert!(detail.summary.content_updated);
         assert_eq!(detail.discoveries.len(), 2);
+        let discovery_queries = detail
+            .discoveries
+            .iter()
+            .map(|discovery| discovery.query.as_str())
+            .collect::<Vec<_>>();
+        assert!(discovery_queries.contains(&"first query"));
+        assert!(discovery_queries.contains(&"second query"));
 
         let unchanged = database
             .record_candidate(

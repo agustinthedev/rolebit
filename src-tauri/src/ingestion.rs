@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::HashMap,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -8,6 +8,7 @@ use std::{
 
 use futures::{StreamExt, stream};
 use tauri::{AppHandle, Emitter};
+use tokio::sync::OnceCell;
 
 use crate::{
     db::{Database, UpsertOutcome},
@@ -84,6 +85,9 @@ struct Counters {
     errors: AtomicUsize,
     successes: AtomicUsize,
 }
+
+type ExtractionCache =
+    Arc<Mutex<HashMap<String, Arc<OnceCell<Result<crate::models::CandidateJob, String>>>>>>;
 
 pub fn try_start_ingestion(app: AppHandle, state: AppState, trigger: &str) -> Result<i64, String> {
     state.try_acquire_run()?;
@@ -181,7 +185,7 @@ async fn execute(
         errors: AtomicUsize::new(0),
         successes: AtomicUsize::new(0),
     });
-    let discovered = Arc::new(Mutex::new(HashSet::<String>::new()));
+    let extraction_cache: ExtractionCache = Arc::new(Mutex::new(HashMap::new()));
     let total = queries.len();
     emit_progress(&app, run_id, "running", None, total, &counters);
 
@@ -192,7 +196,7 @@ async fn execute(
             let settings = settings.clone();
             let provider = provider.clone();
             let counters = counters.clone();
-            let discovered = discovered.clone();
+            let extraction_cache = extraction_cache.clone();
             async move {
                 if state.cancel.load(Ordering::SeqCst) {
                     return;
@@ -212,7 +216,7 @@ async fn execute(
                     &provider,
                     &query,
                     pages,
-                    &discovered,
+                    &extraction_cache,
                     &counters,
                 )
                 .await
@@ -256,7 +260,7 @@ async fn process_query(
     provider: &Provider,
     query: &str,
     pages: u32,
-    discovered: &Arc<Mutex<HashSet<String>>>,
+    extraction_cache: &ExtractionCache,
     counters: &Arc<Counters>,
 ) -> Result<(), String> {
     let execution_id = state.db.start_query_execution(run_id, query)?;
@@ -289,21 +293,16 @@ async fn process_query(
             if state.cancel.load(Ordering::SeqCst) {
                 break;
             }
-            let is_new_url = discovered
-                .lock()
-                .map(|mut urls| urls.insert(result.url.clone()))
-                .unwrap_or(false);
-            if !is_new_url {
-                continue;
-            }
             candidate_count += 1;
             counters.urls.fetch_add(1, Ordering::SeqCst);
-            let extracted = match provider {
-                Provider::Mock => Ok(mock_candidate(query, &result.url)),
-                Provider::Bright(_) => {
-                    fetch_and_extract(&result.url, settings.request_timeout_seconds).await
-                }
-            };
+            let extracted = extract_candidate(
+                extraction_cache,
+                provider,
+                query,
+                &result.url,
+                settings.request_timeout_seconds,
+            )
+            .await;
             match extracted {
                 Ok(candidate) => match state.db.record_candidate(
                     run_id,
@@ -352,6 +351,45 @@ async fn process_query(
         updated_jobs,
         None,
     )
+}
+
+async fn extract_candidate(
+    extraction_cache: &ExtractionCache,
+    provider: &Provider,
+    query: &str,
+    url: &str,
+    timeout_seconds: u32,
+) -> Result<crate::models::CandidateJob, String> {
+    let cell = {
+        let mut cache = extraction_cache
+            .lock()
+            .map_err(|_| "Extraction cache unavailable".to_string())?;
+        cache
+            .entry(url.to_string())
+            .or_insert_with(|| Arc::new(OnceCell::new()))
+            .clone()
+    };
+    let extracted = cell
+        .get_or_init(|| async {
+            match provider {
+                Provider::Mock => Ok(mock_candidate(query, url)),
+                Provider::Bright(_) => fetch_and_extract(url, timeout_seconds).await,
+            }
+        })
+        .await
+        .clone();
+    if extracted.is_err() {
+        let mut cache = extraction_cache
+            .lock()
+            .map_err(|_| "Extraction cache unavailable".to_string())?;
+        if cache
+            .get(url)
+            .is_some_and(|current| Arc::ptr_eq(current, &cell))
+        {
+            cache.remove(url);
+        }
+    }
+    extracted
 }
 
 fn current_settings(state: &AppState) -> Result<AppSettings, String> {
@@ -437,5 +475,31 @@ mod tests {
         drop(worker);
         drop(state);
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn caches_successful_extraction_but_keeps_each_query_attribution_path() {
+        let cache: ExtractionCache = Arc::new(Mutex::new(HashMap::new()));
+        let provider = Provider::Mock;
+        let first = extract_candidate(
+            &cache,
+            &provider,
+            "site:jobs.example.com \"Remote\" \"QA\"",
+            "https://jobs.example.com/42",
+            30,
+        )
+        .await
+        .unwrap();
+        let second = extract_candidate(
+            &cache,
+            &provider,
+            "site:jobs.example.com \"LATAM\" \"SDET\"",
+            "https://jobs.example.com/42",
+            30,
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.title, second.title);
+        assert_eq!(cache.lock().unwrap().len(), 1);
     }
 }
