@@ -1,51 +1,61 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
+import { AlertTriangle, LoaderCircle, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import "./App.css";
+import { AppShell } from "./components/AppShell";
+import { BrandMark } from "./components/BrandMark";
+import { IconButton } from "./components/ui";
+import { api } from "./lib/api";
+import type { Bootstrap, IngestionProgress, PageId } from "./types";
+import { ConfigurationPage } from "./pages/ConfigurationPage";
+import { HistoryPage } from "./pages/HistoryPage";
+import { Onboarding } from "./pages/Onboarding";
+import { OpportunitiesPage } from "./pages/OpportunitiesPage";
+import { OverviewPage } from "./pages/OverviewPage";
+import { SettingsPage } from "./pages/SettingsPage";
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  const [bootstrap, setBootstrap] = useState<Bootstrap>();
+  const [page, setPage] = useState<PageId>("overview");
+  const [progress, setProgress] = useState<IngestionProgress>();
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [selectedJobId, setSelectedJobId] = useState<number>();
+  const [loading, setLoading] = useState(true);
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<string>();
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+  const refresh = useCallback(async () => {
+    try { setBootstrap(await api.bootstrap()); setError(undefined); }
+    catch (cause) { setError(String(cause)); }
+    finally { setLoading(false); }
+  }, []);
 
-  return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: () => void = () => {};
+    api.onProgress((next) => {
+      if (disposed) return;
+      setProgress(next);
+      if (next.status !== "running") {
+        setStarting(false); setRefreshKey((value) => value + 1); void refresh();
+      }
+    }).then((cleanup) => { unlisten = cleanup; });
+    return () => { disposed = true; unlisten(); };
+  }, [refresh]);
 
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
+  const startIngestion = async () => {
+    setStarting(true); setError(undefined);
+    try { await api.startIngestion(); }
+    catch (cause) { setError(String(cause)); setStarting(false); }
+  };
+  const cancel = async () => { try { await api.cancelIngestion(); } catch (cause) { setError(String(cause)); } };
+  const showJob = (id: number) => { setSelectedJobId(id); setPage("opportunities"); };
 
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
-  );
+  if (loading) return <div className="app-loading"><BrandMark /><LoaderCircle className="spin" size={24} /><span>Opening your local library…</span></div>;
+  if (!bootstrap) return <div className="app-loading app-loading--error"><AlertTriangle size={28} /><h1>Rolebit could not open</h1><p>{error ?? "The local application state is unavailable."}</p><button onClick={refresh}>Try again</button></div>;
+  if (!bootstrap.settings.onboardingComplete) return <Onboarding initialSettings={bootstrap.settings} initialConfiguration={bootstrap.configuration} onComplete={setBootstrap} />;
+
+  return <AppShell page={page} onPageChange={setPage}>{error && <div className="global-toast"><AlertTriangle size={17} /><span>{error}</span><IconButton aria-label="Dismiss error" onClick={() => setError(undefined)}><X size={16} /></IconButton></div>}{page === "overview" && <OverviewPage overview={bootstrap.overview} progress={progress} onStart={startIngestion} onCancel={cancel} onNavigate={setPage} onSelectJob={showJob} busy={starting} />}{page === "opportunities" && <OpportunitiesPage refreshKey={refreshKey} initialJobId={selectedJobId} onClearInitial={() => setSelectedJobId(undefined)} />}{page === "configuration" && <ConfigurationPage initial={bootstrap.configuration} settings={bootstrap.settings} onSaved={(configuration) => setBootstrap((current) => current && { ...current, configuration })} onRun={startIngestion} />}{page === "history" && <HistoryPage refreshKey={refreshKey} />}{page === "settings" && <SettingsPage initial={bootstrap.settings} onSaved={(settings) => setBootstrap((current) => current && { ...current, settings })} />}</AppShell>;
 }
 
 export default App;
