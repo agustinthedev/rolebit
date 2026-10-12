@@ -8,6 +8,7 @@ import { SearchListEditor } from "../components/SearchListEditor";
 import { Button, Field, InlineNotice, Input, SurfaceCard, Switch, TechLabel, cn } from "../components/ui";
 
 const steps = ["Welcome", "Bright Data", "Search lists", "Scheduling", "Review", "Complete"];
+const draftKey = "rolebit:onboarding-draft";
 
 const defaults: SearchConfiguration = {
   sites: ["jobs.ashbyhq.com", "jobs.lever.co", "job-boards.greenhouse.io"].map((value) => ({ value, enabled: true })),
@@ -22,9 +23,10 @@ function editableSettings(settings: AppSettings): SaveSettingsInput {
 }
 
 export function Onboarding({ initialSettings, initialConfiguration, onComplete }: { initialSettings: AppSettings; initialConfiguration: SearchConfiguration; onComplete: (bootstrap: Bootstrap) => void }) {
-  const [step, setStep] = useState(0);
-  const [settings, setSettings] = useState<SaveSettingsInput>(editableSettings(initialSettings));
-  const [configuration, setConfiguration] = useState(initialConfiguration);
+  const draft = readDraft();
+  const [step, setStep] = useState(draft?.step ?? 0);
+  const [settings, setSettings] = useState<SaveSettingsInput>(draft?.settings ?? editableSettings(initialSettings));
+  const [configuration, setConfiguration] = useState(draft?.configuration ?? initialConfiguration);
   const [apiKey, setApiKey] = useState("");
   const [preview, setPreview] = useState<QueryPreview>();
   const [busy, setBusy] = useState(false);
@@ -35,6 +37,9 @@ export function Onboarding({ initialSettings, initialConfiguration, onComplete }
     const timer = window.setTimeout(() => api.previewQueries({ ...configuration, pagesPerQuery: settings.pagesPerQuery }).then(setPreview).catch(() => undefined), 120);
     return () => window.clearTimeout(timer);
   }, [configuration, settings.pagesPerQuery, settings.scheduleIntervalHours, settings.estimatedCostPerRequest]);
+  useEffect(() => {
+    window.localStorage.setItem(draftKey, JSON.stringify({ step, settings, configuration }));
+  }, [step, settings, configuration]);
 
   const testConnection = async () => {
     setBusy(true); setError(undefined); setMessage(undefined);
@@ -46,6 +51,7 @@ export function Onboarding({ initialSettings, initialConfiguration, onComplete }
     setBusy(true); setError(undefined);
     try {
       const result = await api.completeOnboarding({ settings: { ...settings, apiKey: apiKey || undefined }, configuration: { ...configuration, pagesPerQuery: settings.pagesPerQuery } });
+      window.localStorage.removeItem(draftKey);
       onComplete(result);
     } catch (cause) { setError(String(cause)); setBusy(false); }
   };
@@ -58,6 +64,18 @@ export function Onboarding({ initialSettings, initialConfiguration, onComplete }
   };
 
   return <div className="onboarding"><div className="onboarding__aurora" /><header className="onboarding__topbar"><BrandMark /><span>Private by design · Stored on this computer</span></header><div className="onboarding__layout"><aside className="onboarding__steps">{steps.map((label, index) => <div className={cn("onboarding-step", index === step && "onboarding-step--active", index < step && "onboarding-step--done")} key={label}><span>{index < step ? <Check size={14} /> : index + 1}</span><div><strong>{label}</strong><small>{index === step ? "Current step" : index < step ? "Complete" : "Up next"}</small></div></div>)}</aside><main className="onboarding__content"><SurfaceCard className="onboarding__card">{step === 0 && <Welcome />}{step === 1 && <ProviderStep settings={settings} setSettings={setSettings} apiKey={apiKey} setApiKey={setApiKey} hasApiKey={initialSettings.hasApiKey} busy={busy} onTest={testConnection} message={message} />}{step === 2 && <SearchStep configuration={configuration} setConfiguration={setConfiguration} />}{step === 3 && <ScheduleStep settings={settings} setSettings={setSettings} />}{step === 4 && <ReviewStep preview={preview} settings={settings} />}{step === 5 && <CompleteStep preview={preview} />}{error && <InlineNotice tone="error" title="Needs attention">{error}</InlineNotice>}<footer className="onboarding__actions"><Button variant="ghost" icon={ArrowLeft} disabled={step === 0 || busy} onClick={() => setStep((value) => value - 1)}>Back</Button>{step < 5 ? <Button variant="primary" icon={ArrowRight} onClick={next}>Continue</Button> : <Button variant="primary" icon={Play} disabled={busy} onClick={complete}>{busy ? "Saving…" : "Open Rolebit"}</Button>}</footer></SurfaceCard></main></div></div>;
+}
+
+function readDraft(): { step: number; settings: SaveSettingsInput; configuration: SearchConfiguration } | undefined {
+  try {
+    const raw = window.localStorage.getItem(draftKey);
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw) as { step?: number; settings?: SaveSettingsInput; configuration?: SearchConfiguration };
+    if (!parsed.settings || !parsed.configuration) return undefined;
+    return { step: Math.max(0, Math.min(5, parsed.step ?? 0)), settings: parsed.settings, configuration: parsed.configuration };
+  } catch {
+    return undefined;
+  }
 }
 
 function Welcome() {
