@@ -12,6 +12,7 @@ import type {
   JobListRequest,
   JobPage,
   QueryPreview,
+  QueryPreviewInput,
   SaveSettingsInput,
   SearchConfiguration,
 } from "../types";
@@ -113,10 +114,13 @@ function generatedQueries(configuration: SearchConfiguration): string[] {
   return [...seen];
 }
 
-function preview(configuration: SearchConfiguration): QueryPreview {
+function preview(input: QueryPreviewInput): QueryPreview {
+  const { configuration } = input;
   const queries = generatedQueries(configuration);
   const totalRequests = queries.length * Math.max(1, configuration.pagesPerQuery);
-  const perMonth = demoSettings.scheduleIntervalHours ? Math.floor(720 / demoSettings.scheduleIntervalHours) : 0;
+  const scheduleIntervalHours = input.scheduleIntervalHours ?? demoSettings.scheduleIntervalHours;
+  const costPerRequest = input.estimatedCostPerRequest === undefined ? demoSettings.estimatedCostPerRequest : input.estimatedCostPerRequest;
+  const perMonth = scheduleIntervalHours ? Math.floor(720 / scheduleIntervalHours) : 0;
   return {
     queries,
     enabledSites: configuration.sites.filter((item) => item.enabled).length,
@@ -124,7 +128,7 @@ function preview(configuration: SearchConfiguration): QueryPreview {
     enabledRoles: configuration.roles.filter((item) => item.enabled).length,
     totalRequests,
     estimatedMonthlyRequests: totalRequests * perMonth,
-    estimatedCost: demoSettings.estimatedCostPerRequest === undefined ? undefined : totalRequests * demoSettings.estimatedCostPerRequest,
+    estimatedCost: costPerRequest === undefined || costPerRequest === null ? undefined : totalRequests * costPerRequest,
   };
 }
 
@@ -151,7 +155,7 @@ async function demoInvoke<T>(command: string, args: Record<string, unknown> = {}
     case "get_overview": return overview() as T;
     case "get_search_configuration": return demoConfig as T;
     case "save_search_configuration": demoConfig = args.configuration as SearchConfiguration; return demoConfig as T;
-    case "preview_queries": return preview(args.configuration as SearchConfiguration) as T;
+    case "preview_queries": return preview(args.input as QueryPreviewInput) as T;
     case "get_settings": return demoSettings as T;
     case "save_settings": {
       const input = args.settings as SaveSettingsInput;
@@ -235,7 +239,7 @@ export const api = {
   overview: () => call<Bootstrap["overview"]>("get_overview"),
   configuration: () => call<SearchConfiguration>("get_search_configuration"),
   saveConfiguration: (configuration: SearchConfiguration) => call<SearchConfiguration>("save_search_configuration", { configuration }),
-  previewQueries: (configuration: SearchConfiguration) => call<QueryPreview>("preview_queries", { configuration }),
+  previewQueries: (input: QueryPreviewInput) => call<QueryPreview>("preview_queries", { input }),
   settings: () => call<AppSettings>("get_settings"),
   saveSettings: (settings: SaveSettingsInput) => call<AppSettings>("save_settings", { settings }),
   completeOnboarding: (input: { settings: SaveSettingsInput; configuration: SearchConfiguration }) => call<Bootstrap>("complete_onboarding", { input }),

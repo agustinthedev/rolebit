@@ -5,7 +5,8 @@ use crate::{
     ingestion::{AppState, try_start_ingestion},
     models::{
         Bootstrap, CompleteOnboardingInput, Diagnostics, IngestionRun, IngestionRunDetail,
-        JobDetail, JobListRequest, JobPage, QueryPreview, SaveSettingsInput, SearchConfiguration,
+        JobDetail, JobListRequest, JobPage, QueryPreview, QueryPreviewInput, SaveSettingsInput,
+        SearchConfiguration,
     },
     provider::BrightDataProvider,
     query, secret,
@@ -39,13 +40,17 @@ pub fn save_search_configuration(
 #[tauri::command]
 pub fn preview_queries(
     state: State<'_, AppState>,
-    configuration: SearchConfiguration,
+    input: QueryPreviewInput,
 ) -> Result<QueryPreview, String> {
     let settings = get_settings_inner(&state)?;
     Ok(query::preview(
-        &configuration,
-        settings.schedule_interval_hours,
-        settings.estimated_cost_per_request,
+        &input.configuration,
+        input
+            .schedule_interval_hours
+            .unwrap_or(settings.schedule_interval_hours),
+        input
+            .estimated_cost_per_request
+            .unwrap_or(settings.estimated_cost_per_request),
     ))
 }
 

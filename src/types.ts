@@ -23,6 +23,12 @@ export interface QueryPreview {
   estimatedCost?: number;
 }
 
+export interface QueryPreviewInput {
+  configuration: SearchConfiguration;
+  scheduleIntervalHours?: number;
+  estimatedCostPerRequest?: number | null;
+}
+
 export interface AppSettings {
   onboardingComplete: boolean;
   provider: "mock" | "bright_data";

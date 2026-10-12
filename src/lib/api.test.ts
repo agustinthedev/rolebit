@@ -14,7 +14,7 @@ describe("browser preview data boundary", () => {
       roles: [{ value: "Staff \"QA\"", enabled: true }],
       pagesPerQuery: 2,
     };
-    const result = await api.previewQueries(configuration);
+    const result = await api.previewQueries({ configuration, scheduleIntervalHours: 12, estimatedCostPerRequest: 0.001 });
     expect(result.queries).toEqual([
       'site:jobs.example.com "Remote" "Staff \\"QA\\""',
       'site:jobs.example.com "Staff \\"QA\\""',
@@ -28,5 +28,17 @@ describe("browser preview data boundary", () => {
     expect(page.items.every((job) => job.trackingStatus === "new")).toBe(true);
     const updated = await api.updateJobStatus(page.items[0].id, "saved");
     expect(updated.trackingStatus).toBe("saved");
+  });
+
+  it("uses the draft schedule interval for monthly preview estimates", async () => {
+    const configuration: SearchConfiguration = {
+      sites: [{ value: "jobs.example.com", enabled: true }],
+      locations: [{ value: "Remote", enabled: true }],
+      roles: [{ value: "QA", enabled: true }],
+      pagesPerQuery: 1,
+    };
+    const sixHours = await api.previewQueries({ configuration, scheduleIntervalHours: 6 });
+    const twelveHours = await api.previewQueries({ configuration, scheduleIntervalHours: 12 });
+    expect(sixHours.estimatedMonthlyRequests).toBe(2 * twelveHours.estimatedMonthlyRequests);
   });
 });

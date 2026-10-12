@@ -29,6 +29,16 @@ pub struct QueryPreview {
     pub estimated_cost: Option<f64>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryPreviewInput {
+    pub configuration: SearchConfiguration,
+    #[serde(default)]
+    pub schedule_interval_hours: Option<u32>,
+    #[serde(default)]
+    pub estimated_cost_per_request: Option<Option<f64>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {

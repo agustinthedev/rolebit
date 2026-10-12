@@ -34,7 +34,7 @@ export function Onboarding({ initialSettings, initialConfiguration, onComplete }
   const [error, setError] = useState<string>();
 
   useEffect(() => {
-    const timer = window.setTimeout(() => api.previewQueries({ ...configuration, pagesPerQuery: settings.pagesPerQuery }).then(setPreview).catch(() => undefined), 120);
+    const timer = window.setTimeout(() => api.previewQueries({ configuration: { ...configuration, pagesPerQuery: settings.pagesPerQuery }, scheduleIntervalHours: settings.scheduleIntervalHours, estimatedCostPerRequest: settings.estimatedCostPerRequest }).then(setPreview).catch(() => undefined), 120);
     return () => window.clearTimeout(timer);
   }, [configuration, settings.pagesPerQuery, settings.scheduleIntervalHours, settings.estimatedCostPerRequest]);
   useEffect(() => {
