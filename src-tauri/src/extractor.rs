@@ -137,21 +137,24 @@ async fn validate_public_url(value: &str) -> Result<(), String> {
 
 fn is_public_ip(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(ip) => {
-            !(ip.is_private()
-                || ip.is_loopback()
-                || ip.is_link_local()
-                || ip.is_broadcast()
-                || ip.is_documentation()
-                || ip.is_unspecified())
-        }
-        IpAddr::V6(ip) => {
+        IpAddr::V4(ip) => is_public_ipv4(ip),
+        IpAddr::V6(ip) => ip.to_ipv4_mapped().map_or(
             !(ip.is_loopback()
                 || ip.is_unspecified()
                 || ip.is_unique_local()
-                || ip.is_unicast_link_local())
-        }
+                || ip.is_unicast_link_local()),
+            is_public_ipv4,
+        ),
     }
+}
+
+fn is_public_ipv4(ip: std::net::Ipv4Addr) -> bool {
+    !(ip.is_private()
+        || ip.is_loopback()
+        || ip.is_link_local()
+        || ip.is_broadcast()
+        || ip.is_documentation()
+        || ip.is_unspecified())
 }
 
 fn json_ld_values(document: &Html) -> Vec<Value> {
@@ -413,5 +416,13 @@ mod tests {
         assert_eq!(job.remote_status, "hybrid");
         assert_eq!(job.canonical_url, "https://jobs.example.com/jobs/42");
         assert_eq!(job.extraction_status, "html_fallback");
+    }
+
+    #[test]
+    fn rejects_private_ipv4_mapped_ipv6_addresses() {
+        assert!(!is_public_ip("::ffff:127.0.0.1".parse().unwrap()));
+        assert!(!is_public_ip("::ffff:10.0.0.1".parse().unwrap()));
+        assert!(!is_public_ip("::ffff:169.254.1.1".parse().unwrap()));
+        assert!(is_public_ip("::ffff:1.1.1.1".parse().unwrap()));
     }
 }
