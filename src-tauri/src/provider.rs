@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use reqwest::{Client, StatusCode};
+use reqwest::{Client, StatusCode, header::CONTENT_TYPE};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::time::sleep;
@@ -53,21 +53,50 @@ impl BrightDataProvider {
                 .client
                 .post("https://api.brightdata.com/request")
                 .bearer_auth(&self.api_key)
+                .header("x-unblock-data-format", "json")
                 .json(&body)
                 .send()
                 .await;
             match response {
                 Ok(response) if response.status().is_success() => {
+                    let status = response.status();
+                    let content_type = response
+                        .headers()
+                        .get(CONTENT_TYPE)
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("unknown")
+                        .to_string();
                     let text = response.text().await.map_err(|error| error.to_string())?;
-                    return parse_serp_response(&text);
+                    if text.trim().is_empty() {
+                        return Err(format!(
+                            "Bright Data returned an empty response (HTTP {status}; content-type {content_type})"
+                        ));
+                    }
+                    return parse_serp_response(&text).map_err(|error| {
+                        let kind = if looks_like_html(&text) {
+                            "Bright Data returned an HTML/interstitial response"
+                        } else {
+                            "Bright Data returned invalid JSON"
+                        };
+                        format!(
+                            "{kind}: {error} (HTTP {status}; content-type {content_type}; body preview: {})",
+                            response_preview(&text)
+                        )
+                    });
                 }
                 Ok(response) => {
                     let status = response.status();
+                    let content_type = response
+                        .headers()
+                        .get(CONTENT_TYPE)
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("unknown")
+                        .to_string();
                     let message = response.text().await.unwrap_or_default();
                     if attempt >= self.retries || !retryable(status) {
                         return Err(format!(
-                            "Bright Data returned {status}: {}",
-                            concise(&message)
+                            "Bright Data returned {status} (content-type {content_type}): {}",
+                            response_preview(&message)
                         ));
                     }
                 }
@@ -198,6 +227,19 @@ fn concise(value: &str) -> String {
     value.chars().take(240).collect()
 }
 
+fn response_preview(value: &str) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        "<empty>".into()
+    } else {
+        concise(&normalized)
+    }
+}
+
+fn looks_like_html(value: &str) -> bool {
+    value.trim_start().starts_with('<')
+}
+
 fn encode_component(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
@@ -212,6 +254,34 @@ mod tests {
         let parsed = parse_serp_response(response).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].title.as_deref(), Some("QA"));
+    }
+
+    #[test]
+    fn parses_full_json_response() {
+        let response = r#"{
+            "general": {"query": "site:jobs.example.com QA"},
+            "input": {"url": "https://www.google.com/search?q=QA"},
+            "organic": [{"global_rank": 1, "link": "https://jobs.example.com/1", "title": "QA"}]
+        }"#;
+        let parsed = parse_serp_response(response).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].url, "https://jobs.example.com/1");
+    }
+
+    #[test]
+    fn previews_empty_provider_responses() {
+        assert_eq!(response_preview("  \n\t"), "<empty>");
+        assert_eq!(
+            response_preview("<html> upstream failure </html>"),
+            "<html> upstream failure </html>"
+        );
+    }
+
+    #[test]
+    fn identifies_html_interstitial_responses() {
+        assert!(looks_like_html("  <!doctype html><html></html>"));
+        assert!(looks_like_html("<html>blocked</html>"));
+        assert!(!looks_like_html(r#"{"organic": []}"#));
     }
 
     #[test]
