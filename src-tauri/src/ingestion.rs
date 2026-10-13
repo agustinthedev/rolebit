@@ -9,12 +9,13 @@ use std::{
 use futures::{StreamExt, stream};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::OnceCell;
+use url::Url;
 
 use crate::{
     db::{Database, UpsertOutcome},
-    extractor::{fetch_and_extract, mock_candidate},
-    models::{AppSettings, IngestionProgress, SearchResult},
-    provider::{BrightDataProvider, mock_results},
+    extractor::{fetch_and_extract, is_non_job_result, mock_candidate},
+    models::{AppSettings, IngestionProgress},
+    provider::{BrightDataProvider, SearchResponse, mock_results},
     query::generate_queries,
     secret,
 };
@@ -62,9 +63,12 @@ enum Provider {
 }
 
 impl Provider {
-    async fn search(&self, query: &str, page: u32) -> Result<Vec<SearchResult>, String> {
+    async fn search(&self, query: &str, page: u32) -> Result<SearchResponse, String> {
         match self {
-            Self::Mock => Ok(mock_results(query, page)),
+            Self::Mock => Ok(SearchResponse {
+                results: mock_results(query, page),
+                diagnostic: None,
+            }),
             Self::Bright(provider) => provider.search(query, page).await,
         }
     }
@@ -83,6 +87,9 @@ struct Counters {
     new_jobs: AtomicUsize,
     updated_jobs: AtomicUsize,
     errors: AtomicUsize,
+    query_failures: AtomicUsize,
+    extraction_failures: AtomicUsize,
+    filtered: AtomicUsize,
     successes: AtomicUsize,
 }
 
@@ -172,6 +179,7 @@ async fn execute(
                     new_jobs: 0,
                     updated_jobs: 0,
                     errors: 1,
+                    filtered_results: 0,
                 },
             );
             return;
@@ -183,6 +191,9 @@ async fn execute(
         new_jobs: AtomicUsize::new(0),
         updated_jobs: AtomicUsize::new(0),
         errors: AtomicUsize::new(0),
+        query_failures: AtomicUsize::new(0),
+        extraction_failures: AtomicUsize::new(0),
+        filtered: AtomicUsize::new(0),
         successes: AtomicUsize::new(0),
     });
     let extraction_cache: ExtractionCache = Arc::new(Mutex::new(HashMap::new()));
@@ -226,6 +237,7 @@ async fn execute(
                     }
                     Err(_) => {
                         counters.errors.fetch_add(1, Ordering::SeqCst);
+                        counters.query_failures.fetch_add(1, Ordering::SeqCst);
                     }
                 }
                 counters.completed.fetch_add(1, Ordering::SeqCst);
@@ -236,6 +248,9 @@ async fn execute(
 
     let cancelled = state.cancel.load(Ordering::SeqCst);
     let errors = counters.errors.load(Ordering::SeqCst);
+    let query_failures = counters.query_failures.load(Ordering::SeqCst);
+    let extraction_failures = counters.extraction_failures.load(Ordering::SeqCst);
+    let filtered = counters.filtered.load(Ordering::SeqCst);
     let successes = counters.successes.load(Ordering::SeqCst);
     let status = if cancelled {
         "cancelled"
@@ -246,7 +261,26 @@ async fn execute(
     } else {
         "completed"
     };
-    let error = (errors > 0).then(|| format!("{errors} query executions encountered errors"));
+    let mut summary = Vec::new();
+    if query_failures > 0 {
+        summary.push(format!(
+            "{query_failures} search request{} failed",
+            if query_failures == 1 { "" } else { "s" }
+        ));
+    }
+    if extraction_failures > 0 {
+        summary.push(format!(
+            "{extraction_failures} candidate extraction{} failed",
+            if extraction_failures == 1 { "" } else { "s" }
+        ));
+    }
+    if filtered > 0 {
+        summary.push(format!(
+            "{filtered} non-matching or generic result{} filtered",
+            if filtered == 1 { "" } else { "s" }
+        ));
+    }
+    let error = (!summary.is_empty()).then(|| summary.join("; "));
     let _ = state.db.finish_run(run_id, status, error.as_deref());
     state.release_run();
     emit_progress(&app, run_id, status, None, total, &counters);
@@ -266,21 +300,25 @@ async fn process_query(
     let execution_id = state.db.start_query_execution(run_id, query)?;
     let mut result_count = 0;
     let mut candidate_count = 0;
+    let mut filtered_count = 0;
     let mut new_jobs = 0;
     let mut updated_jobs = 0;
+    let mut diagnostic = None;
+    let expected_host = expected_site_host(query);
     for page in 1..=pages {
         if state.cancel.load(Ordering::SeqCst) {
             break;
         }
         state.db.record_request_attempt(run_id)?;
-        let results = match provider.search(query, page).await {
-            Ok(results) => results,
+        let response = match provider.search(query, page).await {
+            Ok(response) => response,
             Err(error) => {
                 state.db.finish_query_execution(
                     execution_id,
                     "failed",
                     result_count,
                     candidate_count,
+                    filtered_count,
                     new_jobs,
                     updated_jobs,
                     Some(&error),
@@ -288,13 +326,37 @@ async fn process_query(
                 return Err(error);
             }
         };
+        if diagnostic.is_none() {
+            diagnostic = response.diagnostic;
+        }
+        let results = response.results;
         result_count += results.len();
         for result in results {
             if state.cancel.load(Ordering::SeqCst) {
                 break;
             }
-            candidate_count += 1;
             counters.urls.fetch_add(1, Ordering::SeqCst);
+            if let Some(expected_host) = expected_host.as_deref()
+                && !url_matches_host(expected_host, &result.url)
+            {
+                let error = format!(
+                    "Filtered result outside expected site domain {expected_host}: {}",
+                    result.url
+                );
+                state.db.record_filtered_discovery(
+                    run_id,
+                    execution_id,
+                    provider.name(),
+                    &result.url,
+                    result.title.as_deref(),
+                    result.snippet.as_deref(),
+                    &error,
+                )?;
+                filtered_count += 1;
+                counters.filtered.fetch_add(1, Ordering::SeqCst);
+                continue;
+            }
+            candidate_count += 1;
             let extracted = extract_candidate(
                 extraction_cache,
                 provider,
@@ -304,24 +366,59 @@ async fn process_query(
             )
             .await;
             match extracted {
-                Ok(candidate) => match state.db.record_candidate(
-                    run_id,
-                    execution_id,
-                    provider.name(),
-                    result.title.as_deref(),
-                    result.snippet.as_deref(),
-                    &candidate,
-                )? {
-                    UpsertOutcome::New => {
-                        new_jobs += 1;
-                        counters.new_jobs.fetch_add(1, Ordering::SeqCst);
+                Ok(candidate) => {
+                    if let Some(expected_host) = expected_host.as_deref()
+                        && !url_matches_host(expected_host, &candidate.canonical_url)
+                    {
+                        let error = format!(
+                            "Filtered canonical URL outside expected site domain {expected_host}: {}",
+                            candidate.canonical_url
+                        );
+                        state.db.record_filtered_discovery(
+                            run_id,
+                            execution_id,
+                            provider.name(),
+                            &result.url,
+                            result.title.as_deref(),
+                            result.snippet.as_deref(),
+                            &error,
+                        )?;
+                        filtered_count += 1;
+                        counters.filtered.fetch_add(1, Ordering::SeqCst);
+                        continue;
                     }
-                    UpsertOutcome::Updated => {
-                        updated_jobs += 1;
-                        counters.updated_jobs.fetch_add(1, Ordering::SeqCst);
+                    match state.db.record_candidate(
+                        run_id,
+                        execution_id,
+                        provider.name(),
+                        result.title.as_deref(),
+                        result.snippet.as_deref(),
+                        &candidate,
+                    )? {
+                        UpsertOutcome::New => {
+                            new_jobs += 1;
+                            counters.new_jobs.fetch_add(1, Ordering::SeqCst);
+                        }
+                        UpsertOutcome::Updated => {
+                            updated_jobs += 1;
+                            counters.updated_jobs.fetch_add(1, Ordering::SeqCst);
+                        }
+                        UpsertOutcome::Existing => {}
                     }
-                    UpsertOutcome::Existing => {}
-                },
+                }
+                Err(error) if is_non_job_result(&error) => {
+                    state.db.record_filtered_discovery(
+                        run_id,
+                        execution_id,
+                        provider.name(),
+                        &result.url,
+                        result.title.as_deref(),
+                        result.snippet.as_deref(),
+                        &error,
+                    )?;
+                    filtered_count += 1;
+                    counters.filtered.fetch_add(1, Ordering::SeqCst);
+                }
                 Err(error) => {
                     state.db.record_failed_discovery(
                         run_id,
@@ -333,6 +430,7 @@ async fn process_query(
                         &error,
                     )?;
                     counters.errors.fetch_add(1, Ordering::SeqCst);
+                    counters.extraction_failures.fetch_add(1, Ordering::SeqCst);
                 }
             }
         }
@@ -347,10 +445,28 @@ async fn process_query(
         status,
         result_count,
         candidate_count,
+        filtered_count,
         new_jobs,
         updated_jobs,
-        None,
+        diagnostic.as_deref(),
     )
+}
+
+fn expected_site_host(query: &str) -> Option<String> {
+    query.split_whitespace().find_map(|part| {
+        let value = part.strip_prefix("site:")?.trim_matches(['"', '\'']);
+        let value = value.trim_end_matches('/');
+        let url = Url::parse(&format!("https://{value}")).ok()?;
+        url.host_str()
+            .map(|host| host.trim_end_matches('.').to_ascii_lowercase())
+    })
+}
+
+fn url_matches_host(expected_host: &str, value: &str) -> bool {
+    Url::parse(value)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|host| host == expected_host || host.ends_with(&format!(".{expected_host}")))
 }
 
 async fn extract_candidate(
@@ -431,6 +547,7 @@ fn emit_progress(
             new_jobs: counters.new_jobs.load(Ordering::SeqCst),
             updated_jobs: counters.updated_jobs.load(Ordering::SeqCst),
             errors: counters.errors.load(Ordering::SeqCst),
+            filtered_results: counters.filtered.load(Ordering::SeqCst),
         },
     );
 }
@@ -475,6 +592,26 @@ mod tests {
         drop(worker);
         drop(state);
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn matches_site_domains_without_accepting_lookalikes() {
+        assert_eq!(
+            expected_site_host("site:jobs.example.com \"Remote\" \"QA\""),
+            Some("jobs.example.com".into())
+        );
+        assert!(url_matches_host(
+            "jobs.example.com",
+            "https://careers.jobs.example.com/role/42"
+        ));
+        assert!(!url_matches_host(
+            "jobs.example.com",
+            "https://jobs.example.com.evil.test/role/42"
+        ));
+        assert!(!url_matches_host(
+            "jobs.example.com",
+            "https://www.linkedin.com/jobs/view/42"
+        ));
     }
 
     #[tokio::test]

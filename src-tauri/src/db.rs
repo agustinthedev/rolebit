@@ -180,6 +180,11 @@ CREATE TRIGGER IF NOT EXISTS jobs_au AFTER UPDATE ON jobs BEGIN
 END;
 "#;
 
+const MIGRATION_2: &str = r#"
+ALTER TABLE ingestion_runs ADD COLUMN filtered_results INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE query_executions ADD COLUMN filtered_count INTEGER NOT NULL DEFAULT 0;
+"#;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpsertOutcome {
     New,
@@ -205,12 +210,32 @@ impl Database {
         transaction
             .execute_batch(MIGRATION_1)
             .map_err(|error| error.to_string())?;
-        transaction
-            .execute(
-                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?1)",
-                [now()],
+        let current_version: i64 = transaction
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+                [],
+                |row| row.get(0),
             )
             .map_err(|error| error.to_string())?;
+        if current_version < 1 {
+            transaction
+                .execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?1)",
+                    [now()],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        if current_version < 2 {
+            transaction
+                .execute_batch(MIGRATION_2)
+                .map_err(|error| error.to_string())?;
+            transaction
+                .execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES(2, ?1)",
+                    [now()],
+                )
+                .map_err(|error| error.to_string())?;
+        }
         seed_defaults(&transaction)?;
         transaction.commit().map_err(|error| error.to_string())?;
         Ok(database)
@@ -451,14 +476,15 @@ impl Database {
         status: &str,
         result_count: usize,
         candidates: usize,
+        filtered: usize,
         new_jobs: usize,
         updated_jobs: usize,
         error: Option<&str>,
     ) -> Result<(), String> {
         let connection = self.connect()?;
         connection.execute(
-            "UPDATE query_executions SET status=?2, result_count=?3, candidate_count=?4, new_jobs=?5, updated_jobs=?6, error=?7, completed_at=?8 WHERE id=?1",
-            params![execution_id, status, result_count as i64, candidates as i64, new_jobs as i64, updated_jobs as i64, error, now()],
+            "UPDATE query_executions SET status=?2, result_count=?3, candidate_count=?4, filtered_count=?5, new_jobs=?6, updated_jobs=?7, error=?8, completed_at=?9 WHERE id=?1",
+            params![execution_id, status, result_count as i64, candidates as i64, filtered as i64, new_jobs as i64, updated_jobs as i64, error, now()],
         ).map_err(|db_error| db_error.to_string())?;
         Ok(())
     }
@@ -493,6 +519,28 @@ impl Database {
             .execute(
                 "UPDATE ingestion_runs SET extraction_failures=extraction_failures+1 WHERE id=?1",
                 [run_id],
+            )
+            .map_err(|db_error| db_error.to_string())?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_filtered_discovery(
+        &self,
+        run_id: i64,
+        execution_id: i64,
+        provider: &str,
+        url: &str,
+        title: Option<&str>,
+        snippet: Option<&str>,
+        reason: &str,
+    ) -> Result<(), String> {
+        let connection = self.connect()?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO discovery_results(run_id, query_execution_id, provider, discovered_url, result_title, snippet, status, error, discovered_at)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, 'filtered', ?7, ?8)",
+                params![run_id, execution_id, provider, url, title, snippet, reason, now()],
             )
             .map_err(|db_error| db_error.to_string())?;
         Ok(())
@@ -617,6 +665,7 @@ impl Database {
              successful_queries=(SELECT COUNT(*) FROM query_executions WHERE run_id=?1 AND status='completed'),
              failed_queries=(SELECT COUNT(*) FROM query_executions WHERE run_id=?1 AND status='failed'),
              urls_discovered=(SELECT COUNT(*) FROM discovery_results WHERE run_id=?1),
+             filtered_results=(SELECT COUNT(*) FROM discovery_results WHERE run_id=?1 AND status='filtered'),
              new_jobs=(SELECT COALESCE(SUM(new_jobs),0) FROM query_executions WHERE run_id=?1),
              updated_jobs=(SELECT COALESCE(SUM(updated_jobs),0) FROM query_executions WHERE run_id=?1),
              extraction_failures=(SELECT COUNT(*) FROM discovery_results WHERE run_id=?1 AND status='extraction_failed')
@@ -892,7 +941,7 @@ impl Database {
             .query_row(&format!("{} WHERE id=?1", run_select()), [id], row_to_run)
             .map_err(|error| error.to_string())?;
         let mut statement = connection.prepare(
-            "SELECT qe.id,q.query,qe.status,qe.result_count,qe.candidate_count,qe.new_jobs,qe.updated_jobs,qe.error,qe.started_at,qe.completed_at
+            "SELECT qe.id,q.query,qe.status,qe.result_count,qe.candidate_count,qe.filtered_count,qe.new_jobs,qe.updated_jobs,qe.error,qe.started_at,qe.completed_at
              FROM query_executions qe JOIN search_queries q ON q.id=qe.query_id WHERE qe.run_id=?1 ORDER BY qe.id"
         ).map_err(|error| error.to_string())?;
         let queries = statement
@@ -903,11 +952,12 @@ impl Database {
                     status: row.get(2)?,
                     result_count: row.get(3)?,
                     candidate_count: row.get(4)?,
-                    new_jobs: row.get(5)?,
-                    updated_jobs: row.get(6)?,
-                    error: row.get(7)?,
-                    started_at: row.get(8)?,
-                    completed_at: row.get(9)?,
+                    filtered_count: row.get(5)?,
+                    new_jobs: row.get(6)?,
+                    updated_jobs: row.get(7)?,
+                    error: row.get(8)?,
+                    started_at: row.get(9)?,
+                    completed_at: row.get(10)?,
                 })
             })
             .map_err(|error| error.to_string())?
@@ -1117,7 +1167,7 @@ fn row_to_job_summary(row: &Row<'_>) -> rusqlite::Result<JobSummary> {
 }
 
 fn run_select() -> &'static str {
-    "SELECT id,started_at,completed_at,trigger_type,status,total_queries,attempted_requests,successful_queries,failed_queries,urls_discovered,new_jobs,updated_jobs,extraction_failures,estimated_cost,error_summary FROM ingestion_runs"
+    "SELECT id,started_at,completed_at,trigger_type,status,total_queries,attempted_requests,successful_queries,failed_queries,urls_discovered,filtered_results,new_jobs,updated_jobs,extraction_failures,estimated_cost,error_summary FROM ingestion_runs"
 }
 
 fn row_to_run(row: &Row<'_>) -> rusqlite::Result<IngestionRun> {
@@ -1132,11 +1182,12 @@ fn row_to_run(row: &Row<'_>) -> rusqlite::Result<IngestionRun> {
         successful_queries: row.get(7)?,
         failed_queries: row.get(8)?,
         urls_discovered: row.get(9)?,
-        new_jobs: row.get(10)?,
-        updated_jobs: row.get(11)?,
-        extraction_failures: row.get(12)?,
-        estimated_cost: row.get(13)?,
-        error_summary: row.get(14)?,
+        filtered_results: row.get(10)?,
+        new_jobs: row.get(11)?,
+        updated_jobs: row.get(12)?,
+        extraction_failures: row.get(13)?,
+        estimated_cost: row.get(14)?,
+        error_summary: row.get(15)?,
     })
 }
 
@@ -1245,7 +1296,73 @@ mod tests {
         let configuration = database.get_configuration().unwrap();
         assert_eq!(configuration.sites.len(), 3);
         assert_eq!(crate::query::generate_queries(&configuration).len(), 60);
-        assert_eq!(database.diagnostics("test").unwrap().schema_version, 1);
+        assert_eq!(database.diagnostics("test").unwrap().schema_version, 2);
+        drop(database);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn upgrades_existing_v1_databases_with_filter_metrics() {
+        let directory = std::env::temp_dir().join(format!(
+            "rolebit-upgrade-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("rolebit.sqlite3");
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch(MIGRATION_1).unwrap();
+        connection
+            .execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?1)",
+                [now()],
+            )
+            .unwrap();
+        drop(connection);
+
+        let database = Database::initialize(path).unwrap();
+        assert_eq!(database.diagnostics("test").unwrap().schema_version, 2);
+        let connection = database.connect().unwrap();
+        assert!(connection
+            .prepare("SELECT filtered_results FROM ingestion_runs")
+            .is_ok());
+        assert!(connection
+            .prepare("SELECT filtered_count FROM query_executions")
+            .is_ok());
+        drop(connection);
+        drop(database);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn persists_filtered_discovery_metrics_separately_from_extraction_failures() {
+        let (database, directory) = test_database("filtered-metrics");
+        let run_id = database.start_run("test", 1, None).unwrap();
+        let execution_id = database
+            .start_query_execution(run_id, "site:jobs.example.com QA")
+            .unwrap();
+        database
+            .record_filtered_discovery(
+                run_id,
+                execution_id,
+                "bright_data",
+                "https://www.linkedin.com/jobs/view/42",
+                Some("QA"),
+                None,
+                "outside expected domain",
+            )
+            .unwrap();
+        database
+            .finish_query_execution(execution_id, "completed", 1, 0, 1, 0, 0, None)
+            .unwrap();
+        database.finish_run(run_id, "completed", None).unwrap();
+        let detail = database.get_run(run_id).unwrap();
+        assert_eq!(detail.run.filtered_results, 1);
+        assert_eq!(detail.run.extraction_failures, 0);
+        assert_eq!(detail.queries[0].filtered_count, 1);
         drop(database);
         fs::remove_dir_all(directory).unwrap();
     }

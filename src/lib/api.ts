@@ -91,9 +91,9 @@ const demoJobs: JobDetail[] = [
 }));
 
 let demoRuns: IngestionRun[] = [
-  { id: 3, startedAt: hoursAgo(7), completedAt: hoursAgo(6.8), triggerType: "scheduled", status: "completed", totalQueries: 60, attemptedRequests: 60, successfulQueries: 60, failedQueries: 0, urlsDiscovered: 47, newJobs: 8, updatedJobs: 2, extractionFailures: 3, estimatedCost: 0.06 },
-  { id: 2, startedAt: hoursAgo(31), completedAt: hoursAgo(30.7), triggerType: "manual", status: "partial", totalQueries: 60, attemptedRequests: 60, successfulQueries: 57, failedQueries: 3, urlsDiscovered: 39, newJobs: 5, updatedJobs: 1, extractionFailures: 4, estimatedCost: 0.06, errorSummary: "Three queries were rate limited after retries." },
-  { id: 1, startedAt: hoursAgo(55), completedAt: hoursAgo(54.8), triggerType: "manual", status: "completed", totalQueries: 60, attemptedRequests: 60, successfulQueries: 60, failedQueries: 0, urlsDiscovered: 33, newJobs: 12, updatedJobs: 0, extractionFailures: 2, estimatedCost: 0.06 },
+  { id: 3, startedAt: hoursAgo(7), completedAt: hoursAgo(6.8), triggerType: "scheduled", status: "completed", totalQueries: 60, attemptedRequests: 60, successfulQueries: 60, failedQueries: 0, urlsDiscovered: 47, filteredResults: 2, newJobs: 8, updatedJobs: 2, extractionFailures: 3, estimatedCost: 0.06 },
+  { id: 2, startedAt: hoursAgo(31), completedAt: hoursAgo(30.7), triggerType: "manual", status: "partial", totalQueries: 60, attemptedRequests: 60, successfulQueries: 57, failedQueries: 3, urlsDiscovered: 39, filteredResults: 8, newJobs: 5, updatedJobs: 1, extractionFailures: 4, estimatedCost: 0.06, errorSummary: "Three queries were rate limited after retries." },
+  { id: 1, startedAt: hoursAgo(55), completedAt: hoursAgo(54.8), triggerType: "manual", status: "completed", totalQueries: 60, attemptedRequests: 60, successfulQueries: 60, failedQueries: 0, urlsDiscovered: 33, filteredResults: 1, newJobs: 12, updatedJobs: 0, extractionFailures: 2, estimatedCost: 0.06 },
 ];
 
 let progressListener: ((progress: IngestionProgress) => void) | undefined;
@@ -178,7 +178,7 @@ async function demoInvoke<T>(command: string, args: Record<string, unknown> = {}
     case "list_ingestion_runs": return demoRuns as T;
     case "get_ingestion_run": {
       const run = demoRuns.find((item) => item.id === args.id)!;
-      return { ...run, queries: Array.from({ length: 8 }, (_, index) => ({ id: index + 1, query: generatedQueries(demoConfig)[index], status: index === 7 && run.status === "partial" ? "failed" : "completed", resultCount: 8 - (index % 3), candidateCount: 5, newJobs: index % 3 === 0 ? 1 : 0, updatedJobs: index === 2 ? 1 : 0, error: index === 7 && run.status === "partial" ? "Rate limited after retries" : undefined, startedAt: run.startedAt, completedAt: run.completedAt })) } as T;
+      return { ...run, queries: Array.from({ length: 8 }, (_, index) => ({ id: index + 1, query: generatedQueries(demoConfig)[index], status: index === 7 && run.status === "partial" ? "failed" : "completed", resultCount: 8 - (index % 3), candidateCount: 5, filteredCount: index % 4 === 0 ? 1 : 0, newJobs: index % 3 === 0 ? 1 : 0, updatedJobs: index === 2 ? 1 : 0, error: index === 7 && run.status === "partial" ? "Rate limited after retries" : undefined, startedAt: run.startedAt, completedAt: run.completedAt })) } as T;
     }
     case "get_diagnostics": return { databasePath: demoSettings.databasePath, databaseSizeBytes: 482_304, sqliteVersion: "3.50.4", appVersion: demoSettings.appVersion, schemaVersion: 1 } as T;
     case "test_bright_data_connection": return "Browser preview cannot make paid requests. Run the desktop app to test this connection." as T;
@@ -215,7 +215,7 @@ function simulateRun(): number {
   const id = Math.max(...demoRuns.map((run) => run.id)) + 1;
   const total = generatedQueries(demoConfig).length;
   const startedAt = new Date().toISOString();
-  const run: IngestionRun = { id, startedAt, triggerType: "manual", status: "running", totalQueries: total, attemptedRequests: 0, successfulQueries: 0, failedQueries: 0, urlsDiscovered: 0, newJobs: 0, updatedJobs: 0, extractionFailures: 0 };
+  const run: IngestionRun = { id, startedAt, triggerType: "manual", status: "running", totalQueries: total, attemptedRequests: 0, successfulQueries: 0, failedQueries: 0, urlsDiscovered: 0, filteredResults: 0, newJobs: 0, updatedJobs: 0, extractionFailures: 0 };
   demoRuns = [run, ...demoRuns];
   let completed = 0;
   const timer = window.setInterval(() => {
@@ -225,7 +225,7 @@ function simulateRun(): number {
       window.clearInterval(timer);
       Object.assign(run, { status: "completed", completedAt: new Date().toISOString(), attemptedRequests: total, successfulQueries: total, urlsDiscovered: Math.ceil(total * 0.65), newJobs: 3, updatedJobs: 1 });
     }
-    progressListener?.({ runId: id, status: run.status, currentQuery: run.status === "running" ? generatedQueries(demoConfig)[Math.min(completed, total - 1)] : undefined, completedQueries: completed, totalQueries: total, urlsDiscovered: Math.ceil(completed * 0.65), newJobs: run.status === "completed" ? 3 : Math.floor(completed / 18), updatedJobs: run.status === "completed" ? 1 : 0, errors: 0 });
+    progressListener?.({ runId: id, status: run.status, currentQuery: run.status === "running" ? generatedQueries(demoConfig)[Math.min(completed, total - 1)] : undefined, completedQueries: completed, totalQueries: total, urlsDiscovered: Math.ceil(completed * 0.65), newJobs: run.status === "completed" ? 3 : Math.floor(completed / 18), updatedJobs: run.status === "completed" ? 1 : 0, errors: 0, filteredResults: 0 });
   }, 180);
   return id;
 }

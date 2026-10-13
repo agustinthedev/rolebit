@@ -9,6 +9,12 @@ use url::Url;
 
 use crate::{models::CandidateJob, provider::quoted_terms};
 
+const NON_JOB_RESULT_PREFIX: &str = "NON_JOB_RESULT:";
+
+pub fn is_non_job_result(error: &str) -> bool {
+    error.starts_with(NON_JOB_RESULT_PREFIX)
+}
+
 pub async fn fetch_and_extract(url: &str, timeout_seconds: u32) -> Result<CandidateJob, String> {
     let client = Client::builder()
         .timeout(Duration::from_secs(timeout_seconds as u64))
@@ -274,6 +280,15 @@ fn fallback_extract(
     if description.as_ref().map(|value| value.len()).unwrap_or(0) < 120 {
         return Err("Page does not contain enough job content".into());
     }
+    if is_generic_career_page(
+        &title,
+        description.as_deref().unwrap_or_default(),
+        source_url,
+    ) {
+        return Err(format!(
+            "{NON_JOB_RESULT_PREFIX} page appears to be a generic careers or company page"
+        ));
+    }
     let company = first_text(
         document,
         &["[class*='company']", "meta[property='og:site_name']"],
@@ -304,6 +319,87 @@ fn fallback_extract(
         expires_at: None,
         extraction_status: "html_fallback".into(),
     })
+}
+
+fn is_generic_career_page(title: &str, description: &str, source_url: &str) -> bool {
+    let normalized_title = normalize_whitespace(title).to_ascii_lowercase();
+    let generic_title_markers = [
+        "about",
+        "available jobs",
+        "career opportunities",
+        "careers",
+        "current openings",
+        "explore exciting opportunities",
+        "join our pack",
+        "join our team",
+        "join the team",
+        "join us",
+        "job opportunities",
+        "jobs",
+        "life at",
+        "open positions",
+        "opportunities",
+        "our team",
+        "work with us",
+    ];
+    let title_prefix = normalized_title
+        .split(['|', '-', '·', ':'])
+        .next()
+        .map(str::trim)
+        .unwrap_or_default();
+    if generic_title_markers
+        .iter()
+        .any(|marker| title_prefix == *marker || normalized_title == *marker)
+    {
+        return true;
+    }
+
+    let generic_path = Url::parse(source_url)
+        .ok()
+        .map(|url| {
+            let last_segment = url
+                .path_segments()
+                .and_then(|mut segments| segments.rfind(|segment| !segment.is_empty()))
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            matches!(
+                last_segment.as_str(),
+                "about"
+                    | "career"
+                    | "careers"
+                    | "current-openings"
+                    | "jobs"
+                    | "join-us"
+                    | "join-the-team"
+                    | "open-positions"
+                    | "opportunities"
+                    | "our-team"
+                    | "work-with-us"
+            )
+        })
+        .unwrap_or(false);
+    if !generic_path {
+        return false;
+    }
+
+    let normalized_description = description.to_ascii_lowercase();
+    let job_signal_count = [
+        "apply",
+        "benefits",
+        "experience",
+        "job title",
+        "qualifications",
+        "requirements",
+        "responsibilities",
+        "salary",
+        "skills",
+        "what you'll do",
+        "what you will do",
+    ]
+    .iter()
+    .filter(|signal| normalized_description.contains(**signal))
+    .count();
+    job_signal_count < 2
 }
 
 fn canonical_url(document: &Html, source_url: &str) -> String {
@@ -617,6 +713,13 @@ mod tests {
     fn rejects_pages_without_job_content() {
         let html = "<html><head><title>Home</title></head><body>Hello</body></html>";
         assert!(extract_job(html, "https://example.com").is_err());
+    }
+
+    #[test]
+    fn rejects_generic_careers_pages_with_long_copy() {
+        let html = r#"<html><head><title>Careers | Example</title></head><body><main>We are always looking for talented people to join our growing team. Learn about our culture, benefits, values, and the many opportunities available across the company. Explore our open positions and apply to work with us as we build the future together.</main></body></html>"#;
+        let error = extract_job(html, "https://example.com/careers").unwrap_err();
+        assert!(is_non_job_result(&error));
     }
 
     #[test]

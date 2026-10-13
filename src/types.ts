@@ -122,6 +122,7 @@ export interface IngestionRun {
   successfulQueries: number;
   failedQueries: number;
   urlsDiscovered: number;
+  filteredResults: number;
   newJobs: number;
   updatedJobs: number;
   extractionFailures: number;
@@ -135,6 +136,7 @@ export interface QueryExecution {
   status: string;
   resultCount: number;
   candidateCount: number;
+  filteredCount: number;
   newJobs: number;
   updatedJobs: number;
   error?: string;
@@ -182,6 +184,7 @@ export interface IngestionProgress {
   newJobs: number;
   updatedJobs: number;
   errors: number;
+  filteredResults: number;
 }
 
 export interface Diagnostics {

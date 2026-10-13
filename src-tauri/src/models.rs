@@ -202,6 +202,7 @@ pub struct IngestionRun {
     pub successful_queries: i64,
     pub failed_queries: i64,
     pub urls_discovered: i64,
+    pub filtered_results: i64,
     pub new_jobs: i64,
     pub updated_jobs: i64,
     pub extraction_failures: i64,
@@ -217,6 +218,7 @@ pub struct QueryExecution {
     pub status: String,
     pub result_count: i64,
     pub candidate_count: i64,
+    pub filtered_count: i64,
     pub new_jobs: i64,
     pub updated_jobs: i64,
     pub error: Option<String>,
@@ -244,6 +246,7 @@ pub struct IngestionProgress {
     pub new_jobs: usize,
     pub updated_jobs: usize,
     pub errors: usize,
+    pub filtered_results: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
