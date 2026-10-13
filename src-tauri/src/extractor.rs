@@ -63,9 +63,10 @@ pub async fn fetch_and_extract(url: &str, timeout_seconds: u32) -> Result<Candid
 pub fn extract_job(html: &str, source_url: &str) -> Result<CandidateJob, String> {
     let document = Html::parse_document(html);
     let canonical = canonical_url(&document, source_url);
+    let app_data = page_app_data(&document);
     for value in json_ld_values(&document) {
         if let Some(posting) = find_job_posting(&value) {
-            return from_json_ld(posting, source_url, &canonical);
+            return from_json_ld(posting, source_url, &canonical, app_data.as_ref());
         }
     }
     fallback_extract(&document, source_url, &canonical)
@@ -165,6 +166,17 @@ fn json_ld_values(document: &Html) -> Vec<Value> {
         .collect()
 }
 
+fn page_app_data(document: &Html) -> Option<Value> {
+    let selector = Selector::parse("script").expect("valid selector");
+    document.select(&selector).find_map(|node| {
+        let script = node.inner_html();
+        let assignment = script.find("window.__appData")?;
+        let equals = script[assignment..].find('=')? + assignment + 1;
+        let json = script[equals..].trim().trim_end_matches(';').trim();
+        serde_json::from_str(json).ok()
+    })
+}
+
 fn find_job_posting(value: &Value) -> Option<&Value> {
     if value.get("@type").and_then(Value::as_str) == Some("JobPosting") {
         return Some(value);
@@ -186,6 +198,7 @@ fn from_json_ld(
     value: &Value,
     source_url: &str,
     canonical_url: &str,
+    app_data: Option<&Value>,
 ) -> Result<CandidateJob, String> {
     let title = value
         .get("title")
@@ -201,7 +214,7 @@ fn from_json_ld(
         .get("description")
         .and_then(Value::as_str)
         .map(strip_html);
-    let location = extract_location(value);
+    let location = extract_location(value, app_data);
     let source_domain = Url::parse(canonical_url)
         .ok()
         .and_then(|url| url.host_str().map(str::to_string))
@@ -340,18 +353,76 @@ fn first_text(document: &Html, selectors: &[&str]) -> Option<String> {
     })
 }
 
-fn extract_location(value: &Value) -> Option<String> {
-    let location = value.get("jobLocation")?;
-    let first = location
-        .as_array()
-        .and_then(|items| items.first())
-        .unwrap_or(location);
-    let address = first.get("address").unwrap_or(first);
+fn extract_location(value: &Value, app_data: Option<&Value>) -> Option<String> {
+    if let Some(location) = app_data.and_then(page_location_names) {
+        return Some(location);
+    }
+    let mut locations = Vec::new();
+    if let Some(job_location) = value.get("jobLocation") {
+        let entries = job_location
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or(std::slice::from_ref(job_location));
+        for entry in entries {
+            if let Some(location) = location_entry_text(entry) {
+                push_unique(&mut locations, location);
+            }
+        }
+    }
+    if let Some(requirements) = value
+        .get("applicantLocationRequirements")
+        .and_then(Value::as_array)
+    {
+        for requirement in requirements {
+            if let Some(location) = requirement.get("name").and_then(Value::as_str) {
+                push_unique(&mut locations, location.to_string());
+            }
+        }
+    }
+    (!locations.is_empty()).then(|| locations.join("; "))
+}
+
+fn page_location_names(app_data: &Value) -> Option<String> {
+    let posting = app_data.get("posting")?;
+    let mut locations = Vec::new();
+    if let Some(location) = posting.get("locationName").and_then(Value::as_str) {
+        push_unique(&mut locations, location.to_string());
+    }
+    if let Some(secondary) = posting
+        .get("secondaryLocationNames")
+        .and_then(Value::as_array)
+    {
+        for location in secondary.iter().filter_map(Value::as_str) {
+            push_unique(&mut locations, location.to_string());
+        }
+    }
+    (!locations.is_empty()).then(|| locations.join("; "))
+}
+
+fn location_entry_text(value: &Value) -> Option<String> {
+    let address = value.get("address").unwrap_or(value);
+    if let Some(text) = address.as_str() {
+        return (!text.trim().is_empty()).then(|| normalize_whitespace(text));
+    }
     let parts = ["addressLocality", "addressRegion", "addressCountry"]
         .iter()
         .filter_map(|key| address.get(*key).and_then(value_to_text))
         .collect::<Vec<_>>();
-    (!parts.is_empty()).then(|| parts.join(", "))
+    if !parts.is_empty() {
+        return Some(parts.join(", "));
+    }
+    value
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+        .map(normalize_whitespace)
+}
+
+fn push_unique(values: &mut Vec<String>, value: String) {
+    let value = normalize_whitespace(&value);
+    if !value.is_empty() && !values.iter().any(|item| item.eq_ignore_ascii_case(&value)) {
+        values.push(value);
+    }
 }
 
 fn value_to_text(value: &Value) -> Option<String> {
@@ -529,6 +600,16 @@ mod tests {
         assert_eq!(
             job.description.as_deref(),
             Some("Key responsibilities:\n\n• Own delivery\n• Improve quality")
+        );
+    }
+
+    #[test]
+    fn uses_all_locations_from_page_app_data() {
+        let html = r#"<html><head><script type="application/ld+json">{"@type":"JobPosting","title":"SEO Manager","jobLocation":{"@type":"Place","address":{"addressLocality":"Panama City","addressRegion":"Panama","addressCountry":"Panama"}}}</script><script>window.__appData = {"posting":{"locationName":"Panama - Panama City","secondaryLocationNames":["Argentina - Buenos Aires","Uruguay - Montevideo"]}};</script></head></html>"#;
+        let job = extract_job(html, "https://jobs.example.com/seo-manager").unwrap();
+        assert_eq!(
+            job.location.as_deref(),
+            Some("Panama - Panama City; Argentina - Buenos Aires; Uruguay - Montevideo")
         );
     }
 
