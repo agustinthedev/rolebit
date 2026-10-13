@@ -1,0 +1,162 @@
+# Rolebit
+
+Rolebit is a local-first Windows desktop application for discovering, collecting, and reviewing job opportunities. You define sites, locations, and roles; Rolebit generates the full Cartesian product of Google queries, discovers candidate URLs through Bright Data SERP, verifies job pages, removes duplicates, and preserves the resulting library in local SQLite storage.
+
+![Rolebit overview dashboard](docs/screenshots/overview.png)
+
+## MVP capabilities
+
+- Six-step first-run onboarding with a persisted, non-secret local draft.
+- Editable Sites, Locations, and Roles lists with deterministic query previews.
+- Request-volume, monthly-usage, and user-configured cost estimates.
+- Bright Data SERP integration with localization, pagination, timeouts, retries, rate-limit handling, and cancellation.
+- A zero-cost mock provider for development and product evaluation.
+- JSON-LD `JobPosting` extraction followed by conservative HTML fallback extraction.
+- Canonical URL normalization, source-ID identity, content hashes, transactional upserts, revisions, and multi-query discovery attribution.
+- SQLite FTS5 search, database-backed filters, deterministic sorting, and 25/50/100-row pagination.
+- Opportunity details, original-posting links, and independent New, Seen, Saved, and Dismissed tracking states.
+- Overview metrics, live ingestion progress, execution history, query-level errors, and real activity data.
+- Local scheduling, startup execution, overlap prevention, one-run catch-up behavior, cancellation, recovery, and system-tray controls.
+- Windows Credential Manager storage for the Bright Data API key.
+- NSIS installer configuration and tagged GitHub Release automation.
+
+## Technology
+
+Rolebit uses Tauri 2, Rust, React, TypeScript, Vite, Tailwind CSS 4, Radix/shadcn-style accessible primitives, Lucide icons, and bundled SQLite through `rusqlite`. The application has no hosted backend, local HTTP service, Docker dependency, or centralized account.
+
+## Local-first architecture
+
+```text
+React UI
+  │ typed Tauri commands and progress events
+  ▼
+Rust application core
+  ├─ query generation
+  ├─ Bright Data / mock search provider
+  ├─ guarded page fetch and extraction
+  ├─ normalization and transactional deduplication
+  ├─ scheduler and system tray
+  └─ repositories and migrations
+       ▼
+     SQLite + FTS5                 Windows Credential Manager
+     opportunities, history,      Bright Data API key only
+     configuration, attribution
+```
+
+Persistent records live in the operating system application-data directory, not the installation folder. On Windows the database is normally located at `%APPDATA%\com.rolebit.desktop\rolebit.sqlite3`. Stored opportunities remain available without a network connection and survive application upgrades.
+
+See [architecture.md](docs/architecture.md) for module and schema details and [design-system.md](docs/design-system.md) for the visual source of truth.
+
+## Development prerequisites
+
+- Windows 10 or 11 for the supported desktop target.
+- Node.js 22 or newer.
+- Rust stable with the MSVC target.
+- Microsoft C++ Build Tools and Windows SDK required by Tauri.
+- Microsoft Edge WebView2 Runtime. Windows 11 includes it; the NSIS installer uses Tauri's silent download bootstrapper when it is missing.
+
+Install dependencies and start the desktop application:
+
+```powershell
+npm ci
+npm run tauri dev
+```
+
+For a browser-only visual preview with local in-memory demonstration data:
+
+```powershell
+npm run dev
+```
+
+Browser preview data is clearly labeled and never enters a production user's SQLite database. Add `?onboarding=1` to preview the first-run experience.
+
+## Bright Data configuration
+
+1. Open Settings or the first-run wizard.
+2. Choose **Bright Data SERP**.
+3. Enter the API key and SERP zone identifier.
+4. Set Google's `gl` country and `hl` language independently from the Locations search list.
+5. Optionally choose **Test connection**. The interface warns that this explicit test may consume one paid request.
+
+The key is stored through Windows Credential Manager and is never written to SQLite, frontend storage, source control, logs, or diagnostics. Rolebit never runs a paid search simply because the application started or settings were saved. A live request occurs only after an explicit test, manual ingestion, or a schedule the user enabled.
+
+The initial integration calls `POST https://api.brightdata.com/request` with an encoded Google Search URL and `brd_json=1`. The adapter defensively accepts current structured-response shapes and records empty results separately from request failures.
+
+## Query generation and cost awareness
+
+For every enabled entry, Rolebit generates:
+
+```text
+site:<site> "<location>" "<role>"
+```
+
+The order is deterministic. Schemes and path suffixes are removed from site inputs, quoted terms are escaped, equivalent generated queries are deduplicated, and intentionally empty location or role values remain supported. Rolebit does not rewrite or optimize a strategy automatically.
+
+The preview shows exact queries, pages per query, planned request count, recurring monthly usage, and estimated cost using the user's own per-request estimate. An optional request budget blocks an execution before any provider call if the plan is too large.
+
+## Ingestion, extraction, and safety
+
+The pipeline is:
+
+```text
+Configuration → Queries → SERP → Candidate URLs → Fetch → Extract → Normalize → Upsert → Dashboard
+```
+
+Candidate fetches allow HTTP/HTTPS only. Direct and DNS-resolved loopback, private, link-local, and local destinations are rejected. Redirects are followed manually and revalidated before each request. Rolebit does not bypass authentication, CAPTCHAs, or access controls and never executes downloaded scripts.
+
+Extraction prefers structured `JobPosting` JSON-LD, then uses a conservative generic HTML fallback. Failed or unresolved candidates remain associated with their query execution and are visible in ingestion history; missing fields are not invented.
+
+## Deduplication and attribution
+
+Identity precedence is a reliable source-specific ID followed by the normalized canonical URL. Rolebit deliberately avoids merging jobs by title/company similarity alone.
+
+- A new posting creates one `jobs` record with tracking state `new`.
+- An unchanged repeat updates `last_seen_at` and preserves the user's tracking state.
+- A meaningful change updates verified fields, preserves stronger existing values, records a revision, and surfaces an Updated indicator.
+- A reliably rediscovered closed posting can become active and records a Reopened indicator.
+- Concurrent discoveries use an immediate SQLite transaction and uniqueness constraints, preventing duplicate canonical jobs.
+
+Every discovery remains a separate record linked to its run, query execution, provider, and discovered URL. One job can therefore show several source queries without duplicating its full description.
+
+## Scheduling and background behavior
+
+Scheduling defaults to 12 hours and is disabled until the user enables it. The scheduler runs only while the Rolebit process is active. Closing the main window can keep Rolebit in the system tray, with actions to open the app, run ingestion, pause/resume scheduling, or quit.
+
+Rolebit prevents overlapping runs. After shutdown, sleep, or an interrupted execution it records recovery state and allows at most one due execution instead of building a backlog. Optional startup execution and Start with Windows are configured independently.
+
+## Testing and validation
+
+```powershell
+npm run lint
+npm test
+npm run build
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+cargo test --manifest-path src-tauri/Cargo.toml --lib
+```
+
+No automated test makes a paid Bright Data request. Rust tests cover Cartesian query generation, response parsing, JSON-LD and fallback rejection, migrations, FTS filtering, pagination behavior, revisions, tracking-state preservation, multi-query attribution, and concurrent deduplication. Frontend tests cover configuration editing, query previews, filters, status changes, and application-shell rendering.
+
+Rendered screenshot QA is available through `npm run visual:qa` while `npm run dev` is active. The checked-in captures cover onboarding, overview, opportunities, details, configuration, history, and settings at 1440×900.
+
+## Windows builds and installation
+
+Build an unsigned NSIS installer:
+
+```powershell
+npm run tauri build -- --bundles nsis
+```
+
+The installer is emitted beneath `src-tauri\target\release\bundle\nsis`. It installs per user, creates Start Menu/uninstall entries, and obtains WebView2 when necessary. User data is outside the install directory and is not silently removed during application uninstall.
+
+Unsigned local builds can trigger a Microsoft Defender SmartScreen warning. Production releases should be Authenticode-signed by configuring a certificate thumbprint, SHA-256 digest, and RFC 3161 timestamp server in Tauri's Windows bundle settings or by supplying an approved signing command. Never commit signing certificates or passwords.
+
+The CI workflow checks frontend and Rust code and performs a Windows desktop build. Pushing a `v*` tag runs the release workflow, builds the NSIS artifact, and publishes it through GitHub Releases. Compiled installers are intentionally excluded from source control.
+
+## Known limitations
+
+- The Bright Data path is covered by mocked responses but has not been live-tested with paid credentials in this repository.
+- Generic HTML extraction intentionally rejects ambiguous pages; additional board-specific adapters are future work.
+- Scheduling cannot run while Rolebit is quit or the computer is powered off.
+- Installers are unsigned until the repository owner configures a trusted code-signing identity.
+- The MVP prioritizes the refined light theme; a dark theme is not included.
+- Full application-stage tracking, AI matching, resumes, and automated applications are intentionally outside this MVP.
