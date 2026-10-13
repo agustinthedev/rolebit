@@ -4,8 +4,15 @@ use reqwest::{Client, StatusCode, header::CONTENT_TYPE};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::time::sleep;
+use url::Url;
 
 use crate::models::{AppSettings, SearchResult};
+
+#[derive(Debug, Clone, Default)]
+pub struct SearchResponse {
+    pub results: Vec<SearchResult>,
+    pub diagnostic: Option<String>,
+}
 
 #[derive(Clone)]
 pub struct BrightDataProvider {
@@ -33,20 +40,26 @@ impl BrightDataProvider {
             zone: settings.serp_zone.clone(),
             gl: settings.google_gl.clone(),
             hl: settings.google_hl.clone(),
-            retries: settings.retry_count,
+            retries: settings.retry_count.max(2),
         })
     }
 
-    pub async fn search(&self, query: &str, page: u32) -> Result<Vec<SearchResult>, String> {
+    pub async fn search(&self, query: &str, page: u32) -> Result<SearchResponse, String> {
         let start = page.saturating_sub(1) * 10;
         let google_url = format!(
-            "https://www.google.com/search?q={}&gl={}&hl={}&start={}&brd_json=1",
+            "https://www.google.com/search?q={}&gl={}&hl={}&start={}&brd_browser=chrome&brd_mobile=0&brd_json=1",
             encode_component(query),
             encode_component(&self.gl),
             encode_component(&self.hl),
             start
         );
-        let body = json!({ "zone": self.zone, "url": google_url, "format": "raw" });
+        let session = format!("rolebit-{}", hex::encode(Sha256::digest(query.as_bytes())));
+        let body = json!({
+            "zone": self.zone,
+            "url": google_url,
+            "format": "raw",
+            "search_rewrite": false,
+        });
         let mut attempt = 0;
         loop {
             let response = self
@@ -54,6 +67,7 @@ impl BrightDataProvider {
                 .post("https://api.brightdata.com/request")
                 .bearer_auth(&self.api_key)
                 .header("x-unblock-data-format", "json")
+                .header("x-brd-session", &session)
                 .json(&body)
                 .send()
                 .await;
@@ -68,21 +82,41 @@ impl BrightDataProvider {
                         .to_string();
                     let text = response.text().await.map_err(|error| error.to_string())?;
                     if text.trim().is_empty() {
-                        return Err(format!(
+                        let error = format!(
                             "Bright Data returned an empty response (HTTP {status}; content-type {content_type})"
-                        ));
+                        );
+                        if attempt >= self.retries {
+                            return Err(error);
+                        }
+                        retry_delay(&mut attempt).await;
+                        continue;
                     }
-                    return parse_serp_response(&text).map_err(|error| {
-                        let kind = if looks_like_html(&text) {
-                            "Bright Data returned an HTML/interstitial response"
-                        } else {
-                            "Bright Data returned invalid JSON"
-                        };
-                        format!(
-                            "{kind}: {error} (HTTP {status}; content-type {content_type}; body preview: {})",
-                            response_preview(&text)
-                        )
-                    });
+                    match parse_serp_response_details(&text) {
+                        Ok(parsed) => {
+                            if let Some(error) = validate_effective_query(query, &parsed) {
+                                return Err(error);
+                            }
+                            return Ok(SearchResponse {
+                                results: parsed.results,
+                                diagnostic: parsed.diagnostic,
+                            });
+                        }
+                        Err(error) => {
+                            let kind = if looks_like_html(&text) {
+                                "Bright Data returned an HTML/interstitial response"
+                            } else {
+                                "Bright Data returned invalid JSON"
+                            };
+                            let error = format!(
+                                "{kind}: {error} (HTTP {status}; content-type {content_type}; body preview: {})",
+                                response_preview(&text)
+                            );
+                            if attempt >= self.retries {
+                                return Err(error);
+                            }
+                            retry_delay(&mut attempt).await;
+                        }
+                    }
                 }
                 Ok(response) => {
                     let status = response.status();
@@ -99,15 +133,15 @@ impl BrightDataProvider {
                             response_preview(&message)
                         ));
                     }
+                    retry_delay(&mut attempt).await;
                 }
                 Err(error) => {
                     if attempt >= self.retries {
                         return Err(format!("Bright Data request failed: {error}"));
                     }
+                    retry_delay(&mut attempt).await;
                 }
             }
-            attempt += 1;
-            sleep(Duration::from_millis(350 * 2_u64.pow(attempt.min(5)))).await;
         }
     }
 
@@ -117,7 +151,7 @@ impl BrightDataProvider {
             .await?;
         Ok(format!(
             "Connection succeeded. Bright Data returned {} organic results.",
-            results.len()
+            results.results.len()
         ))
     }
 }
@@ -146,7 +180,20 @@ pub fn mock_results(query: &str, page: u32) -> Vec<SearchResult> {
     }]
 }
 
+#[allow(dead_code)]
 pub fn parse_serp_response(text: &str) -> Result<Vec<SearchResult>, String> {
+    Ok(parse_serp_response_details(text)?.results)
+}
+
+#[derive(Debug, Clone, Default)]
+struct ParsedSerpResponse {
+    results: Vec<SearchResult>,
+    effective_query: Option<String>,
+    detected_query: Option<String>,
+    diagnostic: Option<String>,
+}
+
+fn parse_serp_response_details(text: &str) -> Result<ParsedSerpResponse, String> {
     let value: Value =
         serde_json::from_str(text).map_err(|error| format!("Invalid Bright Data JSON: {error}"))?;
     let normalized = match value.get("body") {
@@ -154,6 +201,18 @@ pub fn parse_serp_response(text: &str) -> Result<Vec<SearchResult>, String> {
         Some(body @ Value::Object(_)) => body.clone(),
         _ => value,
     };
+    let effective_query = normalized
+        .pointer("/general/query")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let detected_query = normalized
+        .pointer("/general/detected_query")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let spelling = normalized
+        .get("spelling")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let organic = normalized
         .get("organic")
         .or_else(|| normalized.pointer("/results/organic"))
@@ -166,9 +225,13 @@ pub fn parse_serp_response(text: &str) -> Result<Vec<SearchResult>, String> {
                 concise(&normalized.to_string())
             ));
         }
-        return Ok(Vec::new());
+        return Ok(ParsedSerpResponse {
+            effective_query,
+            detected_query,
+            ..ParsedSerpResponse::default()
+        });
     };
-    Ok(organic
+    let results = organic
         .iter()
         .filter_map(|entry| {
             let url = entry
@@ -188,7 +251,16 @@ pub fn parse_serp_response(text: &str) -> Result<Vec<SearchResult>, String> {
                     .map(str::to_string),
             })
         })
-        .collect())
+        .collect();
+    let diagnostic = spelling
+        .as_deref()
+        .map(|value| format!("Google suggested spelling: {value}"));
+    Ok(ParsedSerpResponse {
+        results,
+        effective_query,
+        detected_query,
+        diagnostic,
+    })
 }
 
 pub fn quoted_terms(query: &str) -> Vec<String> {
@@ -220,7 +292,39 @@ pub fn quoted_terms(query: &str) -> Vec<String> {
 }
 
 fn retryable(status: StatusCode) -> bool {
-    status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
+    status == StatusCode::REQUEST_TIMEOUT
+        || status == StatusCode::TOO_MANY_REQUESTS
+        || status.is_server_error()
+}
+
+async fn retry_delay(attempt: &mut u32) {
+    *attempt += 1;
+    sleep(Duration::from_millis(350 * 2_u64.pow((*attempt).min(5)))).await;
+}
+
+fn validate_effective_query(query: &str, response: &ParsedSerpResponse) -> Option<String> {
+    let expected = site_host_from_query(query)?;
+    let effective = response
+        .effective_query
+        .as_deref()
+        .or(response.detected_query.as_deref())?;
+    let actual = site_host_from_query(effective);
+    if actual.as_deref() != Some(expected.as_str()) {
+        return Some(format!(
+            "Bright Data changed the effective query site from {expected} to {}",
+            actual.as_deref().unwrap_or("<none>")
+        ));
+    }
+    None
+}
+
+fn site_host_from_query(query: &str) -> Option<String> {
+    query.split_whitespace().find_map(|part| {
+        let value = part.strip_prefix("site:")?.trim_matches(['"', '\'']);
+        let value = value.trim_end_matches('/');
+        let url = Url::parse(&format!("https://{value}")).ok()?;
+        url.host_str().map(|host| host.trim_end_matches('.').to_ascii_lowercase())
+    })
 }
 
 fn concise(value: &str) -> String {
@@ -287,6 +391,15 @@ mod tests {
     #[test]
     fn treats_empty_results_as_success() {
         assert!(parse_serp_response(r#"{"organic":[]}"#).unwrap().is_empty());
+    }
+
+    #[test]
+    fn detects_effective_query_site_changes() {
+        let response = parse_serp_response_details(
+            r#"{"general":{"query":"site:other.example QA"},"organic":[]}"#,
+        )
+        .unwrap();
+        assert!(validate_effective_query("site:jobs.example.com QA", &response).is_some());
     }
 
     #[test]
