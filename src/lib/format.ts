@@ -28,3 +28,19 @@ export function fileSize(bytes: number): string {
   if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
 }
+
+export function plainText(value?: string): string {
+  if (!value) return "";
+  let current = value;
+  for (let pass = 0; pass < 3; pass += 1) {
+    const parsed = new DOMParser().parseFromString(current, "text/html");
+    const next = (parsed.body.textContent ?? "").replace(/\s+/g, " ").trim();
+    if (next === current || !looksLikeMarkup(next)) return next;
+    current = next;
+  }
+  return current;
+}
+
+function looksLikeMarkup(value: string): boolean {
+  return /<\/?[a-z][^>]*>/i.test(value) || /&lt;\/?[a-z][^>]*&gt;/i.test(value);
+}

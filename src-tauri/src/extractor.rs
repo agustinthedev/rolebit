@@ -367,8 +367,20 @@ fn value_to_text(value: &Value) -> Option<String> {
 }
 
 fn strip_html(value: &str) -> String {
-    let fragment = Html::parse_fragment(value);
-    normalize_whitespace(&fragment.root_element().text().collect::<Vec<_>>().join(" "))
+    let mut current = value.to_string();
+    for _ in 0..3 {
+        let fragment = Html::parse_fragment(&current);
+        let text =
+            normalize_whitespace(&fragment.root_element().text().collect::<Vec<_>>().join(" "));
+        let encoded_markup = text.contains("&lt;")
+            || text.contains("&#60;")
+            || (text.contains('<') && text.contains('>'));
+        if !encoded_markup || text == current {
+            return text;
+        }
+        current = text;
+    }
+    normalize_whitespace(&current)
 }
 
 fn normalize_whitespace(value: &str) -> String {
@@ -397,8 +409,19 @@ mod tests {
         let html = r#"<html><head><link rel="canonical" href="https://jobs.example.com/42?utm_source=x"><script type="application/ld+json">{"@type":"JobPosting","title":"Senior QA","hiringOrganization":{"name":"Acme"},"description":"<p>Build quality systems</p>","jobLocationType":"TELECOMMUTE","identifier":{"value":"42"}}</script></head></html>"#;
         let job = extract_job(html, "https://jobs.example.com/42").unwrap();
         assert_eq!(job.title, "Senior QA");
+        assert_eq!(job.description.as_deref(), Some("Build quality systems"));
         assert_eq!(job.remote_status, "remote");
         assert_eq!(job.canonical_url, "https://jobs.example.com/42");
+    }
+
+    #[test]
+    fn strips_encoded_html_from_json_ld_description() {
+        let html = r#"<script type="application/ld+json">{"@type":"JobPosting","title":"SEO Manager","description":"&lt;p style=&quot;min-height:1.5em&quot;&gt;Join Hire Hangar &amp; build better teams.&lt;/p&gt;"}</script>"#;
+        let job = extract_job(html, "https://jobs.example.com/seo-manager").unwrap();
+        assert_eq!(
+            job.description.as_deref(),
+            Some("Join Hire Hangar & build better teams.")
+        );
     }
 
     #[test]
