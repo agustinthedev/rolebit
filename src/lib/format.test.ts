@@ -9,4 +9,8 @@ describe("plainText", () => {
   it("strips HTML that was encoded before being stored", () => {
     expect(plainText("&lt;p style=&quot;min-height:1.5em&quot;&gt;Join Hire Hangar &amp; teams.&lt;/p&gt;")).toBe("Join Hire Hangar & teams.");
   });
+
+  it("keeps paragraphs and list bullets", () => {
+    expect(plainText("<p>Role overview</p><p>Key responsibilities:</p><ul><li>Own delivery</li><li>Improve quality</li></ul>")).toBe("Role overview\n\nKey responsibilities:\n\n• Own delivery\n• Improve quality");
+  });
 });

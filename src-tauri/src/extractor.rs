@@ -1,7 +1,7 @@
 use std::{net::IpAddr, time::Duration};
 
 use reqwest::{Client, header::LOCATION, redirect::Policy};
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Selector};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::net::lookup_host;
@@ -370,8 +370,9 @@ fn strip_html(value: &str) -> String {
     let mut current = value.to_string();
     for _ in 0..3 {
         let fragment = Html::parse_fragment(&current);
-        let text =
-            normalize_whitespace(&fragment.root_element().text().collect::<Vec<_>>().join(" "));
+        let mut rendered = String::new();
+        render_element(fragment.root_element(), &mut rendered, false);
+        let text = normalize_formatted_text(&rendered);
         let encoded_markup = text.contains("&lt;")
             || text.contains("&#60;")
             || (text.contains('<') && text.contains('>'));
@@ -380,7 +381,104 @@ fn strip_html(value: &str) -> String {
         }
         current = text;
     }
-    normalize_whitespace(&current)
+    normalize_formatted_text(&current)
+}
+
+fn render_element(element: ElementRef<'_>, output: &mut String, inside_list_item: bool) {
+    let name = element.value().name();
+    let is_list_item = name == "li";
+    let is_block = matches!(
+        name,
+        "article"
+            | "blockquote"
+            | "br"
+            | "div"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "header"
+            | "li"
+            | "ol"
+            | "p"
+            | "section"
+            | "ul"
+    );
+    let is_spaced_block = matches!(
+        name,
+        "article"
+            | "blockquote"
+            | "div"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "header"
+            | "ol"
+            | "p"
+            | "section"
+            | "ul"
+    );
+    if is_list_item {
+        append_break(output);
+        output.push_str("• ");
+    } else if is_spaced_block && !inside_list_item {
+        append_blank_line(output);
+    }
+    for child in element.children() {
+        if let Some(child_element) = ElementRef::wrap(child) {
+            render_element(child_element, output, inside_list_item || is_list_item);
+        } else if let Some(text) = child.value().as_text() {
+            output.push_str(text);
+        }
+    }
+    if !is_list_item && is_block && !inside_list_item {
+        if is_spaced_block {
+            append_blank_line(output);
+        } else {
+            append_break(output);
+        }
+    }
+}
+
+fn append_break(output: &mut String) {
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+}
+
+fn append_blank_line(output: &mut String) {
+    if output.ends_with("\n\n") {
+        return;
+    }
+    if output.ends_with('\n') {
+        output.push('\n');
+    } else {
+        output.push_str("\n\n");
+    }
+}
+
+fn normalize_formatted_text(value: &str) -> String {
+    let mut lines = Vec::new();
+    let mut blank_pending = false;
+    for line in value.lines().map(str::trim) {
+        if line.is_empty() {
+            if !lines.is_empty() {
+                blank_pending = true;
+            }
+            continue;
+        }
+        if blank_pending {
+            lines.push(String::new());
+            blank_pending = false;
+        }
+        lines.push(normalize_whitespace(line));
+    }
+    lines.join("\n")
 }
 
 fn normalize_whitespace(value: &str) -> String {
@@ -421,6 +519,16 @@ mod tests {
         assert_eq!(
             job.description.as_deref(),
             Some("Join Hire Hangar & build better teams.")
+        );
+    }
+
+    #[test]
+    fn preserves_paragraphs_and_list_items_in_descriptions() {
+        let html = r#"<script type="application/ld+json">{"@type":"JobPosting","title":"QA Engineer","description":"<p>Key responsibilities:</p><ul><li>Own delivery</li><li>Improve quality</li></ul>"}</script>"#;
+        let job = extract_job(html, "https://jobs.example.com/qa-engineer").unwrap();
+        assert_eq!(
+            job.description.as_deref(),
+            Some("Key responsibilities:\n\n• Own delivery\n• Improve quality")
         );
     }
 

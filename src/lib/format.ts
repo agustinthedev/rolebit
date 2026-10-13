@@ -34,11 +34,45 @@ export function plainText(value?: string): string {
   let current = value;
   for (let pass = 0; pass < 3; pass += 1) {
     const parsed = new DOMParser().parseFromString(current, "text/html");
-    const next = (parsed.body.textContent ?? "").replace(/\s+/g, " ").trim();
+    const next = normalizeFormattedText(renderNode(parsed.body));
     if (next === current || !looksLikeMarkup(next)) return next;
     current = next;
   }
   return current;
+}
+
+const blockTags = new Set(["article", "blockquote", "br", "div", "h1", "h2", "h3", "h4", "h5", "h6", "header", "li", "ol", "p", "section", "ul"]);
+
+function renderNode(node: Node, insideListItem = false): string {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
+  if (node.nodeType !== Node.ELEMENT_NODE) return "";
+  const element = node as Element;
+  const tag = element.tagName.toLowerCase();
+  const isListItem = tag === "li";
+  const isBlock = blockTags.has(tag);
+  let output = "";
+  if (isListItem) output += "\n• ";
+  else if (isBlock && !insideListItem) output += "\n";
+  for (const child of Array.from(element.childNodes)) output += renderNode(child, insideListItem || isListItem);
+  if (!isListItem && isBlock && !insideListItem) output += "\n";
+  return output;
+}
+
+function normalizeFormattedText(value: string): string {
+  const lines: string[] = [];
+  let blankPending = false;
+  for (const line of value.split(/\r?\n/).map((item) => item.trim())) {
+    if (!line) {
+      if (lines.length) blankPending = true;
+      continue;
+    }
+    if (blankPending) {
+      lines.push("");
+      blankPending = false;
+    }
+    lines.push(line.replace(/\s+/g, " "));
+  }
+  return lines.join("\n");
 }
 
 function looksLikeMarkup(value: string): boolean {
