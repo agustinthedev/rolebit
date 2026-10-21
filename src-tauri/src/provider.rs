@@ -170,7 +170,8 @@ pub fn mock_results(query: &str, page: u32) -> Vec<SearchResult> {
     let path = if site.path.is_empty() {
         format!("/rolebit-demo/{}", &digest[..12])
     } else {
-        site.path.replace('*', &format!("rolebit-demo-{}", &digest[..6]))
+        site.path
+            .replace('*', &format!("rolebit-demo-{}", &digest[..6]))
     };
     vec![SearchResult {
         url: format!("https://{}{}", site.host, path),
@@ -410,11 +411,10 @@ mod tests {
             r#"{"general":{"query":"site:job-boards.greenhouse.io QA"},"organic":[]}"#,
         )
         .unwrap();
-        assert!(validate_effective_query(
-            "site:job-boards.greenhouse.io/*/jobs/* QA",
-            &response
-        )
-        .is_some());
+        assert!(
+            validate_effective_query("site:job-boards.greenhouse.io/*/jobs/* QA", &response)
+                .is_some()
+        );
     }
 
     #[test]

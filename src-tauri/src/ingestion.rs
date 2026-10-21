@@ -583,27 +583,17 @@ mod tests {
 
     #[test]
     fn matches_site_patterns_without_accepting_lookalikes() {
-        let expected = site_pattern_from_query("site:jobs.example.com \"Remote\" \"QA\"")
-            .unwrap();
-        assert_eq!(
-            expected.normalized(),
-            "jobs.example.com"
-        );
-        assert!(expected.matches_url(
-            "https://careers.jobs.example.com/role/42"
-        ));
-        assert!(!expected.matches_url(
-            "https://jobs.example.com.evil.test/role/42"
-        ));
-        assert!(!expected.matches_url(
-            "https://www.linkedin.com/jobs/view/42"
-        ));
+        let expected = site_pattern_from_query("site:jobs.example.com \"Remote\" \"QA\"").unwrap();
+        assert_eq!(expected.normalized(), "jobs.example.com");
+        assert!(expected.matches_url("https://careers.jobs.example.com/role/42"));
+        assert!(!expected.matches_url("https://jobs.example.com.evil.test/role/42"));
+        assert!(!expected.matches_url("https://www.linkedin.com/jobs/view/42"));
     }
 
     #[test]
     fn filters_results_outside_expected_site_path() {
-        let expected = site_pattern_from_query("site:job-boards.greenhouse.io/*/jobs/* Uruguay")
-            .unwrap();
+        let expected =
+            site_pattern_from_query("site:job-boards.greenhouse.io/*/jobs/* Uruguay").unwrap();
         assert!(expected.matches_url("https://job-boards.greenhouse.io/acme/jobs/123"));
         assert!(!expected.matches_url("https://job-boards.greenhouse.io/acme/careers"));
     }

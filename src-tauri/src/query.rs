@@ -64,9 +64,9 @@ impl SitePattern {
 }
 
 pub fn site_pattern_from_query(query: &str) -> Option<SitePattern> {
-    query.split_whitespace().find_map(|part| {
-        SitePattern::parse(part.strip_prefix("site:")?)
-    })
+    query
+        .split_whitespace()
+        .find_map(|part| SitePattern::parse(part.strip_prefix("site:")?))
 }
 
 pub fn normalize_site(value: &str) -> String {
