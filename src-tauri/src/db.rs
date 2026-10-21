@@ -283,6 +283,20 @@ const MIGRATION_4: &str = r#"
 DELETE FROM search_items WHERE kind = 'role';
 "#;
 
+const MIGRATION_5: &str = r#"
+CREATE TABLE IF NOT EXISTS employer_boards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ats_type TEXT NOT NULL CHECK(ats_type IN ('ashby', 'lever', 'greenhouse', 'workable')),
+  board_name TEXT NOT NULL,
+  company_name TEXT,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  UNIQUE(ats_type, board_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_employer_boards_company ON employer_boards(company_name);
+"#;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpsertOutcome {
     New,
@@ -352,6 +366,17 @@ impl Database {
             transaction
                 .execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES(4, ?1)",
+                    [now()],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        if current_version < 5 {
+            transaction
+                .execute_batch(MIGRATION_5)
+                .map_err(|error| error.to_string())?;
+            transaction
+                .execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES(5, ?1)",
                     [now()],
                 )
                 .map_err(|error| error.to_string())?;
@@ -972,6 +997,23 @@ impl Database {
              ON CONFLICT(job_id, provider, source_url) DO UPDATE SET last_seen_at=excluded.last_seen_at",
             params![job_id, provider, candidate.source_url, timestamp],
         ).map_err(|error| error.to_string())?;
+        if let Some(board) = &candidate.ats_board {
+            let company_name = candidate
+                .company
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty());
+            transaction
+                .execute(
+                    "INSERT INTO employer_boards(ats_type, board_name, company_name, first_seen_at, last_seen_at)
+                     VALUES(?1, ?2, ?3, ?4, ?4)
+                     ON CONFLICT(ats_type, board_name) DO UPDATE SET
+                     company_name=COALESCE(employer_boards.company_name, excluded.company_name),
+                     last_seen_at=excluded.last_seen_at",
+                    params![board.ats_type.as_str(), board.board_name, company_name, timestamp],
+                )
+                .map_err(|error| error.to_string())?;
+        }
         transaction.execute(
             "INSERT INTO extraction_attempts(discovery_id, status, strategy, attempted_at) VALUES(?1, 'success', ?2, ?3)",
             params![discovery_id, candidate.extraction_status, timestamp],
@@ -1685,6 +1727,7 @@ mod tests {
             canonical_url: "https://jobs.example.com/roles/quality-42".into(),
             external_id: Some("quality-42".into()),
             source_domain: "jobs.example.com".into(),
+            ats_board: None,
             title: "Senior Quality Engineer".into(),
             company: Some("Example Labs".into()),
             description: Some(description.into()),
@@ -1718,7 +1761,7 @@ mod tests {
         let configuration = database.get_configuration().unwrap();
         assert_eq!(configuration.sites.len(), 3);
         assert_eq!(crate::query::generate_queries(&configuration).len(), 12);
-        assert_eq!(database.diagnostics("test").unwrap().schema_version, 4);
+        assert_eq!(database.diagnostics("test").unwrap().schema_version, 5);
         drop(database);
         fs::remove_dir_all(directory).unwrap();
     }
@@ -1746,7 +1789,7 @@ mod tests {
         drop(connection);
 
         let database = Database::initialize(path).unwrap();
-        assert_eq!(database.diagnostics("test").unwrap().schema_version, 4);
+        assert_eq!(database.diagnostics("test").unwrap().schema_version, 5);
         let connection = database.connect().unwrap();
         assert!(
             connection
@@ -1756,6 +1799,11 @@ mod tests {
         assert!(
             connection
                 .prepare("SELECT filtered_count FROM query_executions")
+                .is_ok()
+        );
+        assert!(
+            connection
+                .prepare("SELECT ats_type, board_name FROM employer_boards")
                 .is_ok()
         );
         drop(connection);

@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use tokio::net::lookup_host;
 use url::Url;
 
-use crate::{models::CandidateJob, provider::quoted_terms};
+use crate::{ats::detect_ats_board, models::CandidateJob, provider::quoted_terms};
 
 const NON_JOB_RESULT_PREFIX: &str = "NON_JOB_RESULT:";
 
@@ -105,6 +105,7 @@ pub fn mock_candidate(query: &str, url: &str) -> CandidateJob {
         canonical_url: url.into(),
         external_id,
         source_domain,
+        ats_board: None,
         title: role.clone(),
         company: Some(company.into()),
         description: Some(format!(
@@ -239,6 +240,7 @@ fn from_json_ld(
         canonical_url: canonical_url.into(),
         external_id,
         source_domain,
+        ats_board: detect_ats_board(canonical_url).or_else(|| detect_ats_board(source_url)),
         title,
         company,
         description,
@@ -309,6 +311,7 @@ fn fallback_extract(
         canonical_url: canonical_url.into(),
         external_id,
         source_domain,
+        ats_board: detect_ats_board(canonical_url).or_else(|| detect_ats_board(source_url)),
         title,
         company,
         description,
