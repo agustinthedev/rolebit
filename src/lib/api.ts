@@ -103,9 +103,9 @@ const demoJobs: JobDetail[] = [
 }));
 
 let demoRuns: IngestionRun[] = [
-  { id: 3, startedAt: hoursAgo(7), completedAt: hoursAgo(6.8), triggerType: "scheduled", status: "completed", totalQueries: 60, attemptedRequests: 60, successfulQueries: 60, failedQueries: 0, urlsDiscovered: 47, filteredResults: 2, newJobs: 8, updatedJobs: 2, extractionFailures: 3, estimatedCost: 0.06 },
-  { id: 2, startedAt: hoursAgo(31), completedAt: hoursAgo(30.7), triggerType: "manual", status: "partial", totalQueries: 60, attemptedRequests: 60, successfulQueries: 57, failedQueries: 3, urlsDiscovered: 39, filteredResults: 8, newJobs: 5, updatedJobs: 1, extractionFailures: 4, estimatedCost: 0.06, errorSummary: "Three queries were rate limited after retries." },
-  { id: 1, startedAt: hoursAgo(55), completedAt: hoursAgo(54.8), triggerType: "manual", status: "completed", totalQueries: 60, attemptedRequests: 60, successfulQueries: 60, failedQueries: 0, urlsDiscovered: 33, filteredResults: 1, newJobs: 12, updatedJobs: 0, extractionFailures: 2, estimatedCost: 0.06 },
+  { id: 3, startedAt: hoursAgo(7), completedAt: hoursAgo(6.8), triggerType: "scheduled", status: "completed", totalQueries: 12, attemptedRequests: 12, successfulQueries: 12, failedQueries: 0, urlsDiscovered: 47, filteredResults: 2, newJobs: 8, updatedJobs: 2, extractionFailures: 3, estimatedCost: 0.012 },
+  { id: 2, startedAt: hoursAgo(31), completedAt: hoursAgo(30.7), triggerType: "manual", status: "partial", totalQueries: 12, attemptedRequests: 12, successfulQueries: 11, failedQueries: 1, urlsDiscovered: 39, filteredResults: 8, newJobs: 5, updatedJobs: 1, extractionFailures: 4, estimatedCost: 0.012, errorSummary: "One query was rate limited after retries." },
+  { id: 1, startedAt: hoursAgo(55), completedAt: hoursAgo(54.8), triggerType: "manual", status: "completed", totalQueries: 12, attemptedRequests: 12, successfulQueries: 12, failedQueries: 0, urlsDiscovered: 33, filteredResults: 1, newJobs: 12, updatedJobs: 0, extractionFailures: 2, estimatedCost: 0.012 },
 ];
 
 let progressListener: ((progress: IngestionProgress) => void) | undefined;
