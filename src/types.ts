@@ -9,7 +9,6 @@ export interface SearchItem {
 export interface SearchConfiguration {
   sites: SearchItem[];
   locations: SearchItem[];
-  roles: SearchItem[];
   pagesPerQuery: number;
 }
 
@@ -17,7 +16,6 @@ export interface QueryPreview {
   queries: string[];
   enabledSites: number;
   enabledLocations: number;
-  enabledRoles: number;
   totalRequests: number;
   estimatedMonthlyRequests: number;
   estimatedCost?: number;

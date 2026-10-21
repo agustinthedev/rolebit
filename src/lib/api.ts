@@ -31,7 +31,6 @@ const hoursAgo = (hours: number) => new Date(now.getTime() - hours * 3_600_000).
 let demoConfig: SearchConfiguration = {
   sites: ["jobs.ashbyhq.com", "jobs.lever.co", "job-boards.greenhouse.io"].map((value, index) => ({ id: index + 1, value, enabled: true })),
   locations: ["Uruguay", "LATAM", "Remote", "Worldwide"].map((value, index) => ({ id: index + 10, value, enabled: true })),
-  roles: ["QA", "SDET", "Software Engineer", "DevOps", "Product"].map((value, index) => ({ id: index + 20, value, enabled: true })),
   pagesPerQuery: 1,
 };
 
@@ -117,10 +116,8 @@ function generatedQueries(configuration: SearchConfiguration): string[] {
     const domain = site.value.trim().replace(/^https?:\/\//, "").replace(/\/$/, "").split("/")[0].toLowerCase();
     if (!domain) continue;
     for (const location of values(configuration.locations)) {
-      for (const role of values(configuration.roles)) {
-        const quote = (value: string) => `"${value.trim().replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
-        seen.add([`site:${domain}`, location.value.trim() && quote(location.value), role.value.trim() && quote(role.value)].filter(Boolean).join(" "));
-      }
+      const quote = (value: string) => `"${value.trim().replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+      seen.add([`site:${domain}`, location.value.trim() && quote(location.value)].filter(Boolean).join(" "));
     }
   }
   return [...seen];
@@ -137,7 +134,6 @@ function preview(input: QueryPreviewInput): QueryPreview {
     queries,
     enabledSites: configuration.sites.filter((item) => item.enabled).length,
     enabledLocations: configuration.locations.filter((item) => item.enabled).length,
-    enabledRoles: configuration.roles.filter((item) => item.enabled).length,
     totalRequests,
     estimatedMonthlyRequests: totalRequests * perMonth,
     estimatedCost: costPerRequest === undefined || costPerRequest === null ? undefined : totalRequests * costPerRequest,

@@ -7,7 +7,6 @@ import type { AppSettings, SearchConfiguration } from "../types";
 const configuration: SearchConfiguration = {
   sites: [{ value: "jobs.example.com", enabled: true }],
   locations: [{ value: "Remote", enabled: true }],
-  roles: [{ value: "QA", enabled: true }],
   pagesPerQuery: 1,
 };
 
@@ -42,8 +41,8 @@ describe("ConfigurationPage", () => {
     const runButton = screen.getByRole("button", { name: "Run ingestion" });
     await waitFor(() => expect(runButton).toBeEnabled());
 
-    await user.clear(screen.getByLabelText("Roles / Terms item 1"));
-    await user.type(screen.getByLabelText("Roles / Terms item 1"), "SDET");
+    await user.clear(screen.getByLabelText("Locations item 1"));
+    await user.type(screen.getByLabelText("Locations item 1"), "LATAM");
     expect(runButton).toBeDisabled();
     expect(screen.getByText("Save your edited search strategy before starting an ingestion run.")).toBeInTheDocument();
 

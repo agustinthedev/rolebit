@@ -13,7 +13,6 @@ pub struct SearchItem {
 pub struct SearchConfiguration {
     pub sites: Vec<SearchItem>,
     pub locations: Vec<SearchItem>,
-    pub roles: Vec<SearchItem>,
     pub pages_per_query: u32,
 }
 
@@ -23,7 +22,6 @@ pub struct QueryPreview {
     pub queries: Vec<String>,
     pub enabled_sites: usize,
     pub enabled_locations: usize,
-    pub enabled_roles: usize,
     pub total_requests: usize,
     pub estimated_monthly_requests: usize,
     pub estimated_cost: Option<f64>,
