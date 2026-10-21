@@ -50,7 +50,7 @@ export function ProfilePage() {
   if (loading) return <div className="page profile-loading">Loading your profile…</div>;
 
   return <div className="page">
-    <PageHeader eyebrow="Your professional library" title="Profile" description="Keep your personal story, experience, and projects in one local workspace. This information is ready for the future CV Builder and matching flow." actions={<Button variant="primary" icon={Save} disabled={busy} onClick={save}>{busy ? "Saving…" : "Save profile"}</Button>} />
+    <PageHeader eyebrow="Your professional library" title="Profile" description="Keep your personal story, experience, and projects in one local workspace." actions={<Button variant="primary" icon={Save} disabled={busy} onClick={save}>{busy ? "Saving…" : "Save profile"}</Button>} />
     {notice && <InlineNotice tone="success" title="Saved">{notice}</InlineNotice>}
     {error && <InlineNotice tone="error" title="Could not save">{error}</InlineNotice>}
     <div className="profile-layout">
