@@ -9,14 +9,13 @@ use std::{
 use futures::{StreamExt, stream};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::OnceCell;
-use url::Url;
 
 use crate::{
     db::{Database, UpsertOutcome},
     extractor::{fetch_and_extract, is_non_job_result, mock_candidate},
     models::{AppSettings, IngestionProgress},
     provider::{BrightDataProvider, SearchResponse, mock_results},
-    query::generate_queries,
+    query::{generate_queries, site_pattern_from_query},
     secret,
 };
 
@@ -304,7 +303,7 @@ async fn process_query(
     let mut new_jobs = 0;
     let mut updated_jobs = 0;
     let mut diagnostic = None;
-    let expected_host = expected_site_host(query);
+    let expected_site = site_pattern_from_query(query);
     for page in 1..=pages {
         if state.cancel.load(Ordering::SeqCst) {
             break;
@@ -336,12 +335,13 @@ async fn process_query(
                 break;
             }
             counters.urls.fetch_add(1, Ordering::SeqCst);
-            if let Some(expected_host) = expected_host.as_deref()
-                && !url_matches_host(expected_host, &result.url)
+            if let Some(expected_site) = expected_site.as_ref()
+                && !expected_site.matches_url(&result.url)
             {
                 let error = format!(
-                    "Filtered result outside expected site domain {expected_host}: {}",
-                    result.url
+                    "Filtered result outside expected site pattern {}: {}",
+                    expected_site.normalized(),
+                    result.url,
                 );
                 state.db.record_filtered_discovery(
                     run_id,
@@ -367,12 +367,13 @@ async fn process_query(
             .await;
             match extracted {
                 Ok(candidate) => {
-                    if let Some(expected_host) = expected_host.as_deref()
-                        && !url_matches_host(expected_host, &candidate.canonical_url)
+                    if let Some(expected_site) = expected_site.as_ref()
+                        && !expected_site.matches_url(&candidate.canonical_url)
                     {
                         let error = format!(
-                            "Filtered canonical URL outside expected site domain {expected_host}: {}",
-                            candidate.canonical_url
+                            "Filtered canonical URL outside expected site pattern {}: {}",
+                            expected_site.normalized(),
+                            candidate.canonical_url,
                         );
                         state.db.record_filtered_discovery(
                             run_id,
@@ -450,23 +451,6 @@ async fn process_query(
         updated_jobs,
         diagnostic.as_deref(),
     )
-}
-
-fn expected_site_host(query: &str) -> Option<String> {
-    query.split_whitespace().find_map(|part| {
-        let value = part.strip_prefix("site:")?.trim_matches(['"', '\'']);
-        let value = value.trim_end_matches('/');
-        let url = Url::parse(&format!("https://{value}")).ok()?;
-        url.host_str()
-            .map(|host| host.trim_end_matches('.').to_ascii_lowercase())
-    })
-}
-
-fn url_matches_host(expected_host: &str, value: &str) -> bool {
-    Url::parse(value)
-        .ok()
-        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
-        .is_some_and(|host| host == expected_host || host.ends_with(&format!(".{expected_host}")))
 }
 
 async fn extract_candidate(
@@ -598,23 +582,30 @@ mod tests {
     }
 
     #[test]
-    fn matches_site_domains_without_accepting_lookalikes() {
+    fn matches_site_patterns_without_accepting_lookalikes() {
+        let expected = site_pattern_from_query("site:jobs.example.com \"Remote\" \"QA\"")
+            .unwrap();
         assert_eq!(
-            expected_site_host("site:jobs.example.com \"Remote\" \"QA\""),
-            Some("jobs.example.com".into())
+            expected.normalized(),
+            "jobs.example.com"
         );
-        assert!(url_matches_host(
-            "jobs.example.com",
+        assert!(expected.matches_url(
             "https://careers.jobs.example.com/role/42"
         ));
-        assert!(!url_matches_host(
-            "jobs.example.com",
+        assert!(!expected.matches_url(
             "https://jobs.example.com.evil.test/role/42"
         ));
-        assert!(!url_matches_host(
-            "jobs.example.com",
+        assert!(!expected.matches_url(
             "https://www.linkedin.com/jobs/view/42"
         ));
+    }
+
+    #[test]
+    fn filters_results_outside_expected_site_path() {
+        let expected = site_pattern_from_query("site:job-boards.greenhouse.io/*/jobs/* Uruguay")
+            .unwrap();
+        assert!(expected.matches_url("https://job-boards.greenhouse.io/acme/jobs/123"));
+        assert!(!expected.matches_url("https://job-boards.greenhouse.io/acme/careers"));
     }
 
     #[tokio::test]
