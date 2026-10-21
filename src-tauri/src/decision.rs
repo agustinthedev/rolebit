@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use reqwest::Client;
+use sha2::{Digest, Sha256};
 use serde_json::{Map, Value, json};
 
 use crate::models::{CandidateJob, OpportunityMatch, Profile};
@@ -20,6 +21,8 @@ pub struct PageDecision {
     pub confidence: Option<f64>,
     pub matching: Option<OpportunityMatch>,
     pub matching_error: Option<String>,
+    pub decision_input_hash: Option<String>,
+    pub match_profile_hash: Option<String>,
 }
 
 impl PageDecision {
@@ -33,8 +36,29 @@ impl PageDecision {
             confidence: None,
             matching: None,
             matching_error: None,
+            decision_input_hash: None,
+            match_profile_hash: None,
         }
     }
+}
+
+pub fn decision_input_hash(candidate: &CandidateJob, page_text: &str) -> String {
+    hash_value(json!({
+        "title": candidate.title,
+        "company": candidate.company,
+        "sourceDomain": candidate.source_domain,
+        "description": clip_text(candidate.description.as_deref().unwrap_or("Unavailable"), 4_000),
+        "location": candidate.location,
+        "pageText": clip_text(page_text, 20_000),
+    }))
+}
+
+pub fn matching_profile_hash(profile: &Profile) -> String {
+    hash_value(json!({"profile": matching_profile(profile)}))
+}
+
+fn hash_value(value: Value) -> String {
+    hex::encode(Sha256::digest(value.to_string().as_bytes()))
 }
 
 impl DecisionsClient {
@@ -111,6 +135,8 @@ impl DecisionsClient {
             confidence: answer.get("confidence").and_then(Value::as_f64),
             matching: None,
             matching_error: None,
+            decision_input_hash: None,
+            match_profile_hash: None,
         })
     }
 

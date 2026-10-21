@@ -11,8 +11,10 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::OnceCell;
 
 use crate::{
-    decision::{DecisionsClient, PageDecision},
-    db::{Database, UpsertOutcome},
+    decision::{
+        DecisionsClient, PageDecision, decision_input_hash, matching_profile_hash,
+    },
+    db::{Database, StoredDecision, UpsertOutcome},
     extractor::{ExtractedPage, fetch_and_extract, mock_candidate},
     models::{AppSettings, IngestionProgress, Profile},
     provider::{BrightDataProvider, SearchResponse, mock_results},
@@ -460,10 +462,18 @@ async fn process_query(
                         counters.filtered.fetch_add(1, Ordering::SeqCst);
                         continue;
                     }
-                    match decide_page(decision_cache, decisions_client, &page, profile).await
+                    let stored_decision = state.db.stored_decision(candidate)?;
+                    match decide_page(
+                        decision_cache,
+                        decisions_client,
+                        &page,
+                        profile,
+                        stored_decision,
+                    )
+                    .await
                     {
                         Ok(decision) if decision.is_job_posting() => {
-                            match state.db.record_candidate(
+                            match state.db.record_candidate_with_decision_cache(
                                 run_id,
                                 execution_id,
                                 provider.name(),
@@ -473,6 +483,8 @@ async fn process_query(
                                 decision.confidence,
                                 decision.matching.as_ref(),
                                 decision.matching_error.as_deref(),
+                                decision.decision_input_hash.as_deref(),
+                                decision.match_profile_hash.as_deref(),
                             )? {
                                 UpsertOutcome::New => {
                                     new_jobs += 1;
@@ -614,11 +626,17 @@ async fn decide_page(
     client: Option<&DecisionsClient>,
     page: &ExtractedPage,
     profile: &Profile,
+    stored: Option<StoredDecision>,
 ) -> Result<PageDecision, String> {
     let Some(client) = client else {
         return Ok(PageDecision::local_job_posting());
     };
-    let url = page.candidate.source_url.clone();
+    let url = page.candidate.canonical_url.clone();
+    let input_hash = decision_input_hash(&page.candidate, &page.page_text);
+    let profile_hash = matching_profile_hash(profile);
+    let content_unchanged = stored.as_ref().is_some_and(|stored| {
+        stored.decision_input_hash.as_deref() == Some(input_hash.as_str())
+    });
     let cell = {
         let mut cache = cache
             .lock()
@@ -630,10 +648,31 @@ async fn decide_page(
     };
     let decision = cell
         .get_or_init(|| async {
-            let mut decision = client
-                .classify_page(&page.candidate, &page.page_text)
-                .await?;
+            let mut decision = if content_unchanged {
+                let stored = stored.as_ref().expect("unchanged decision exists");
+                PageDecision {
+                    category: "job_posting".into(),
+                    confidence: stored.classification_confidence,
+                    matching: stored.matching.clone(),
+                    matching_error: stored.match_error.clone(),
+                    decision_input_hash: Some(input_hash.clone()),
+                    match_profile_hash: stored.match_profile_hash.clone(),
+                }
+            } else {
+                client
+                    .classify_page(&page.candidate, &page.page_text)
+                    .await?
+            };
+            decision.decision_input_hash = Some(input_hash.clone());
             if decision.is_job_posting() {
+                let match_unchanged = content_unchanged
+                    && stored.as_ref().is_some_and(|stored| {
+                        stored.match_profile_hash.as_deref() == Some(profile_hash.as_str())
+                    });
+                if match_unchanged {
+                    return Ok(decision);
+                }
+                decision.match_profile_hash = Some(profile_hash.clone());
                 match client
                     .score_job(&page.candidate, &page.page_text, profile)
                     .await
