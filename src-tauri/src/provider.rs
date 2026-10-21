@@ -436,12 +436,16 @@ mod tests {
         let first = mock_results(r#"site:jobs.example.com/jobs "Remote""#, 1);
         let second = mock_results(r#"site:jobs.example.com/jobs "Uruguay""#, 1);
         assert_ne!(first[0].url, second[0].url);
-        assert!(first[0]
-            .url
-            .starts_with("https://jobs.example.com/jobs/rolebit-demo-"));
-        assert!(second[0]
-            .url
-            .starts_with("https://jobs.example.com/jobs/rolebit-demo-"));
+        assert!(
+            first[0]
+                .url
+                .starts_with("https://jobs.example.com/jobs/rolebit-demo-")
+        );
+        assert!(
+            second[0]
+                .url
+                .starts_with("https://jobs.example.com/jobs/rolebit-demo-")
+        );
     }
 
     #[test]

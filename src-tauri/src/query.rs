@@ -19,7 +19,10 @@ impl SitePattern {
             .unwrap_or(value);
         let value = value.split(['?', '#']).next()?.trim_end_matches('/');
         let parsed = Url::parse(&format!("https://{value}")).ok()?;
-        let host = parsed.host_str()?.trim_end_matches('.').to_ascii_lowercase();
+        let host = parsed
+            .host_str()?
+            .trim_end_matches('.')
+            .to_ascii_lowercase();
         if host.is_empty() {
             return None;
         }
@@ -255,11 +258,7 @@ mod tests {
             pattern.normalized(),
             "jobs.example.com:443/carri%C3%A8res/*"
         );
-        assert!(pattern.matches_url(
-            "https://jobs.example.com:443/carri%C3%A8res/123"
-        ));
-        assert!(!pattern.matches_url(
-            "https://jobs.example.com:8443/carri%C3%A8res/123"
-        ));
+        assert!(pattern.matches_url("https://jobs.example.com:443/carri%C3%A8res/123"));
+        assert!(!pattern.matches_url("https://jobs.example.com:8443/carri%C3%A8res/123"));
     }
 }
