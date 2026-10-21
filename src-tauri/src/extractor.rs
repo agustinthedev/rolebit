@@ -89,7 +89,8 @@ pub fn extract_page(
     let page_text = extract_page_text(&document, result_snippet);
     for value in json_ld_values(&document) {
         if let Some(posting) = find_job_posting(&value) {
-            if let Ok(candidate) = from_json_ld(posting, source_url, &canonical, app_data.as_ref()) {
+            if let Ok(candidate) = from_json_ld(posting, source_url, &canonical, app_data.as_ref())
+            {
                 return Ok(ExtractedPage {
                     candidate,
                     page_text,

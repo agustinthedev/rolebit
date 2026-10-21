@@ -9,9 +9,9 @@ use sha2::{Digest, Sha256};
 
 use crate::models::{
     ActivityDay, AppSettings, CandidateJob, Diagnostics, IngestionRun, IngestionRunDetail,
-    JobDetail, JobDiscovery, JobFacets, JobListRequest, JobPage, JobSummary, Profile,
-    ProfileCertification, ProfileEducation, ProfileExperience, ProfileLanguage, ProfileProject,
-    OpportunityMatch, ProfileSkill, QueryExecution, SaveSettingsInput, SearchConfiguration,
+    JobDetail, JobDiscovery, JobFacets, JobListRequest, JobPage, JobSummary, OpportunityMatch,
+    Profile, ProfileCertification, ProfileEducation, ProfileExperience, ProfileLanguage,
+    ProfileProject, ProfileSkill, QueryExecution, SaveSettingsInput, SearchConfiguration,
     SearchItem,
 };
 

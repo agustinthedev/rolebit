@@ -11,10 +11,8 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::OnceCell;
 
 use crate::{
-    decision::{
-        DecisionsClient, PageDecision, decision_input_hash, matching_profile_hash,
-    },
     db::{Database, StoredDecision, UpsertOutcome},
+    decision::{DecisionsClient, PageDecision, decision_input_hash, matching_profile_hash},
     extractor::{ExtractedPage, fetch_and_extract, mock_candidate},
     models::{AppSettings, IngestionProgress, Profile},
     provider::{BrightDataProvider, SearchResponse, mock_results},
@@ -95,10 +93,8 @@ struct Counters {
     successes: AtomicUsize,
 }
 
-type ExtractionCache =
-    Arc<Mutex<HashMap<String, Arc<OnceCell<Result<ExtractedPage, String>>>>>>;
-type DecisionCache =
-    Arc<Mutex<HashMap<String, Arc<OnceCell<Result<PageDecision, String>>>>>>;
+type ExtractionCache = Arc<Mutex<HashMap<String, Arc<OnceCell<Result<ExtractedPage, String>>>>>>;
+type DecisionCache = Arc<Mutex<HashMap<String, Arc<OnceCell<Result<PageDecision, String>>>>>>;
 
 pub fn try_start_ingestion(app: AppHandle, state: AppState, trigger: &str) -> Result<i64, String> {
     state.try_acquire_run()?;
@@ -196,7 +192,8 @@ async fn execute(
     let decisions_client = match &provider {
         Provider::Mock => None,
         Provider::Bright(_) => match secret::get_decisions_api_key().and_then(|key| {
-            let key = key.ok_or_else(|| "OpenAI Decisions API key is not configured".to_string())?;
+            let key =
+                key.ok_or_else(|| "OpenAI Decisions API key is not configured".to_string())?;
             DecisionsClient::new(key, settings.request_timeout_seconds)
         }) {
             Ok(client) => Some(client),
@@ -634,9 +631,9 @@ async fn decide_page(
     let url = page.candidate.canonical_url.clone();
     let input_hash = decision_input_hash(&page.candidate, &page.page_text);
     let profile_hash = matching_profile_hash(profile);
-    let content_unchanged = stored.as_ref().is_some_and(|stored| {
-        stored.decision_input_hash.as_deref() == Some(input_hash.as_str())
-    });
+    let content_unchanged = stored
+        .as_ref()
+        .is_some_and(|stored| stored.decision_input_hash.as_deref() == Some(input_hash.as_str()));
     let cell = {
         let mut cache = cache
             .lock()
