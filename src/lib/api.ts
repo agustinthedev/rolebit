@@ -31,7 +31,6 @@ const hoursAgo = (hours: number) => new Date(now.getTime() - hours * 3_600_000).
 let demoConfig: SearchConfiguration = {
   sites: ["jobs.ashbyhq.com", "jobs.lever.co", "job-boards.greenhouse.io"].map((value, index) => ({ id: index + 1, value, enabled: true })),
   locations: ["Uruguay", "LATAM", "Remote", "Worldwide"].map((value, index) => ({ id: index + 10, value, enabled: true })),
-  roles: ["QA", "SDET", "Software Engineer", "DevOps", "Product"].map((value, index) => ({ id: index + 20, value, enabled: true })),
   pagesPerQuery: 1,
 };
 
@@ -54,6 +53,7 @@ let demoSettings: AppSettings = {
   closeToTray: true,
   lastScheduledRunAt: hoursAgo(7),
   hasApiKey: false,
+  hasDecisionsApiKey: false,
   databasePath: "C:\\Users\\You\\AppData\\Roaming\\com.rolebit.desktop\\rolebit.sqlite3",
   appVersion: "0.1.0",
 };
@@ -103,9 +103,9 @@ const demoJobs: JobDetail[] = [
 }));
 
 let demoRuns: IngestionRun[] = [
-  { id: 3, startedAt: hoursAgo(7), completedAt: hoursAgo(6.8), triggerType: "scheduled", status: "completed", totalQueries: 60, attemptedRequests: 60, successfulQueries: 60, failedQueries: 0, urlsDiscovered: 47, filteredResults: 2, newJobs: 8, updatedJobs: 2, extractionFailures: 3, estimatedCost: 0.06 },
-  { id: 2, startedAt: hoursAgo(31), completedAt: hoursAgo(30.7), triggerType: "manual", status: "partial", totalQueries: 60, attemptedRequests: 60, successfulQueries: 57, failedQueries: 3, urlsDiscovered: 39, filteredResults: 8, newJobs: 5, updatedJobs: 1, extractionFailures: 4, estimatedCost: 0.06, errorSummary: "Three queries were rate limited after retries." },
-  { id: 1, startedAt: hoursAgo(55), completedAt: hoursAgo(54.8), triggerType: "manual", status: "completed", totalQueries: 60, attemptedRequests: 60, successfulQueries: 60, failedQueries: 0, urlsDiscovered: 33, filteredResults: 1, newJobs: 12, updatedJobs: 0, extractionFailures: 2, estimatedCost: 0.06 },
+  { id: 3, startedAt: hoursAgo(7), completedAt: hoursAgo(6.8), triggerType: "scheduled", status: "completed", totalQueries: 12, attemptedRequests: 12, successfulQueries: 12, failedQueries: 0, urlsDiscovered: 47, filteredResults: 2, newJobs: 8, updatedJobs: 2, extractionFailures: 3, estimatedCost: 0.012 },
+  { id: 2, startedAt: hoursAgo(31), completedAt: hoursAgo(30.7), triggerType: "manual", status: "partial", totalQueries: 12, attemptedRequests: 12, successfulQueries: 11, failedQueries: 1, urlsDiscovered: 39, filteredResults: 8, newJobs: 5, updatedJobs: 1, extractionFailures: 4, estimatedCost: 0.012, errorSummary: "One query was rate limited after retries." },
+  { id: 1, startedAt: hoursAgo(55), completedAt: hoursAgo(54.8), triggerType: "manual", status: "completed", totalQueries: 12, attemptedRequests: 12, successfulQueries: 12, failedQueries: 0, urlsDiscovered: 33, filteredResults: 1, newJobs: 12, updatedJobs: 0, extractionFailures: 2, estimatedCost: 0.012 },
 ];
 
 let progressListener: ((progress: IngestionProgress) => void) | undefined;
@@ -117,10 +117,8 @@ function generatedQueries(configuration: SearchConfiguration): string[] {
     const domain = site.value.trim().replace(/^https?:\/\//, "").replace(/\/$/, "").split("/")[0].toLowerCase();
     if (!domain) continue;
     for (const location of values(configuration.locations)) {
-      for (const role of values(configuration.roles)) {
-        const quote = (value: string) => `"${value.trim().replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
-        seen.add([`site:${domain}`, location.value.trim() && quote(location.value), role.value.trim() && quote(role.value)].filter(Boolean).join(" "));
-      }
+      const quote = (value: string) => `"${value.trim().replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+      seen.add([`site:${domain}`, location.value.trim() && quote(location.value)].filter(Boolean).join(" "));
     }
   }
   return [...seen];
@@ -137,7 +135,6 @@ function preview(input: QueryPreviewInput): QueryPreview {
     queries,
     enabledSites: configuration.sites.filter((item) => item.enabled).length,
     enabledLocations: configuration.locations.filter((item) => item.enabled).length,
-    enabledRoles: configuration.roles.filter((item) => item.enabled).length,
     totalRequests,
     estimatedMonthlyRequests: totalRequests * perMonth,
     estimatedCost: costPerRequest === undefined || costPerRequest === null ? undefined : totalRequests * costPerRequest,
@@ -173,13 +170,13 @@ async function demoInvoke<T>(command: string, args: Record<string, unknown> = {}
     case "get_settings": return demoSettings as T;
     case "save_settings": {
       const input = args.settings as SaveSettingsInput;
-      demoSettings = { ...demoSettings, ...input, hasApiKey: Boolean(input.apiKey || demoSettings.hasApiKey) };
+      demoSettings = { ...demoSettings, ...input, hasApiKey: Boolean(input.apiKey || demoSettings.hasApiKey), hasDecisionsApiKey: Boolean(input.decisionsApiKey || demoSettings.hasDecisionsApiKey) };
       return demoSettings as T;
     }
     case "complete_onboarding": {
       const input = args.input as { settings: SaveSettingsInput; configuration: SearchConfiguration };
       demoConfig = input.configuration;
-      demoSettings = { ...demoSettings, ...input.settings, onboardingComplete: true, hasApiKey: Boolean(input.settings.apiKey) };
+      demoSettings = { ...demoSettings, ...input.settings, onboardingComplete: true, hasApiKey: Boolean(input.settings.apiKey), hasDecisionsApiKey: Boolean(input.settings.decisionsApiKey) };
       return { settings: demoSettings, configuration: demoConfig, overview: overview(), recentRuns: demoRuns } as T;
     }
     case "list_jobs": return listDemoJobs(args.request as JobListRequest) as T;
@@ -196,6 +193,7 @@ async function demoInvoke<T>(command: string, args: Record<string, unknown> = {}
     }
     case "get_diagnostics": return { databasePath: demoSettings.databasePath, databaseSizeBytes: 482_304, sqliteVersion: "3.50.4", appVersion: demoSettings.appVersion, schemaVersion: 1 } as T;
     case "test_bright_data_connection": return "Browser preview cannot make paid requests. Run the desktop app to test this connection." as T;
+    case "test_decisions_connection": return "Browser preview cannot make API requests. Run the desktop app to test this connection." as T;
     case "start_ingestion": return simulateRun() as T;
     case "cancel_ingestion": return undefined as T;
     default: throw new Error(`Browser preview does not implement ${command}`);
@@ -263,6 +261,7 @@ export const api = {
   saveSettings: (settings: SaveSettingsInput) => call<AppSettings>("save_settings", { settings }),
   completeOnboarding: (input: { settings: SaveSettingsInput; configuration: SearchConfiguration }) => call<Bootstrap>("complete_onboarding", { input }),
   testConnection: (apiKey: string | undefined, zone: string) => call<string>("test_bright_data_connection", { apiKey, zone }),
+  testDecisionsConnection: (apiKey?: string) => call<string>("test_decisions_connection", { apiKey }),
   listJobs: (request: JobListRequest) => call<JobPage>("list_jobs", { request }),
   job: (id: number) => call<JobDetail>("get_job", { id }),
   updateJobStatus: (id: number, status: JobDetail["trackingStatus"]) => call<JobDetail>("update_tracking_status", { id, status }),

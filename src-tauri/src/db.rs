@@ -279,6 +279,10 @@ CREATE INDEX IF NOT EXISTS idx_profile_languages_order ON profile_languages(prof
 CREATE INDEX IF NOT EXISTS idx_profile_certifications_order ON profile_certifications(profile_id, sort_order);
 "#;
 
+const MIGRATION_4: &str = r#"
+DELETE FROM search_items WHERE kind = 'role';
+"#;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpsertOutcome {
     New,
@@ -341,6 +345,17 @@ impl Database {
                 )
                 .map_err(|error| error.to_string())?;
         }
+        if current_version < 4 {
+            transaction
+                .execute_batch(MIGRATION_4)
+                .map_err(|error| error.to_string())?;
+            transaction
+                .execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES(4, ?1)",
+                    [now()],
+                )
+                .map_err(|error| error.to_string())?;
+        }
         seed_defaults(&transaction)?;
         transaction.commit().map_err(|error| error.to_string())?;
         Ok(database)
@@ -378,7 +393,6 @@ impl Database {
             .map_err(|error| error.to_string())?;
         let mut sites = Vec::new();
         let mut locations = Vec::new();
-        let mut roles = Vec::new();
         for row in rows {
             let (id, kind, value, enabled) = row.map_err(|error| error.to_string())?;
             let item = SearchItem {
@@ -389,7 +403,6 @@ impl Database {
             match kind.as_str() {
                 "site" => sites.push(item),
                 "location" => locations.push(item),
-                "role" => roles.push(item),
                 _ => {}
             }
         }
@@ -397,7 +410,6 @@ impl Database {
         Ok(SearchConfiguration {
             sites,
             locations,
-            roles,
             pages_per_query,
         })
     }
@@ -412,7 +424,6 @@ impl Database {
             .map_err(|error| error.to_string())?;
         insert_items(&transaction, "site", &config.sites)?;
         insert_items(&transaction, "location", &config.locations)?;
-        insert_items(&transaction, "role", &config.roles)?;
         set_setting(
             &transaction,
             "pages_per_query",
@@ -629,6 +640,7 @@ impl Database {
         &self,
         app_version: &str,
         has_api_key: bool,
+        has_decisions_api_key: bool,
     ) -> Result<AppSettings, String> {
         let connection = self.connect()?;
         Ok(AppSettings {
@@ -656,6 +668,7 @@ impl Database {
             close_to_tray: setting_bool(&connection, "close_to_tray", true)?,
             last_scheduled_run_at: setting_optional(&connection, "last_scheduled_run_at")?,
             has_api_key,
+            has_decisions_api_key,
             database_path: self.path.to_string_lossy().to_string(),
             app_version: app_version.to_string(),
         })
@@ -1368,10 +1381,6 @@ fn seed_defaults(transaction: &Transaction<'_>) -> Result<(), String> {
                 ],
             ),
             ("location", vec!["Uruguay", "LATAM", "Remote", "Worldwide"]),
-            (
-                "role",
-                vec!["QA", "SDET", "Software Engineer", "DevOps", "Product"],
-            ),
         ] {
             for (index, value) in values.iter().enumerate() {
                 transaction.execute(
@@ -1708,8 +1717,8 @@ mod tests {
         let (database, directory) = test_database("migrations");
         let configuration = database.get_configuration().unwrap();
         assert_eq!(configuration.sites.len(), 3);
-        assert_eq!(crate::query::generate_queries(&configuration).len(), 60);
-        assert_eq!(database.diagnostics("test").unwrap().schema_version, 3);
+        assert_eq!(crate::query::generate_queries(&configuration).len(), 12);
+        assert_eq!(database.diagnostics("test").unwrap().schema_version, 4);
         drop(database);
         fs::remove_dir_all(directory).unwrap();
     }
@@ -1737,7 +1746,7 @@ mod tests {
         drop(connection);
 
         let database = Database::initialize(path).unwrap();
-        assert_eq!(database.diagnostics("test").unwrap().schema_version, 3);
+        assert_eq!(database.diagnostics("test").unwrap().schema_version, 4);
         let connection = database.connect().unwrap();
         assert!(
             connection

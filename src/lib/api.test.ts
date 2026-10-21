@@ -11,13 +11,12 @@ describe("browser preview data boundary", () => {
         { value: "disabled.example.com", enabled: false },
       ],
       locations: [{ value: "Remote", enabled: true }, { value: "", enabled: true }],
-      roles: [{ value: "Staff \"QA\"", enabled: true }],
       pagesPerQuery: 2,
     };
     const result = await api.previewQueries({ configuration, scheduleIntervalHours: 12, estimatedCostPerRequest: 0.001 });
     expect(result.queries).toEqual([
-      'site:jobs.example.com "Remote" "Staff \\"QA\\""',
-      'site:jobs.example.com "Staff \\"QA\\""',
+      'site:jobs.example.com "Remote"',
+      'site:jobs.example.com',
     ]);
     expect(result.totalRequests).toBe(4);
   });
@@ -34,7 +33,6 @@ describe("browser preview data boundary", () => {
     const configuration: SearchConfiguration = {
       sites: [{ value: "jobs.example.com", enabled: true }],
       locations: [{ value: "Remote", enabled: true }],
-      roles: [{ value: "QA", enabled: true }],
       pagesPerQuery: 1,
     };
     const sixHours = await api.previewQueries({ configuration, scheduleIntervalHours: 6 });

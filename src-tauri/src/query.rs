@@ -27,7 +27,6 @@ fn enabled(items: &[SearchItem]) -> Vec<&SearchItem> {
 pub fn generate_queries(config: &SearchConfiguration) -> Vec<String> {
     let sites = enabled(&config.sites);
     let locations = enabled(&config.locations);
-    let roles = enabled(&config.roles);
     let mut seen = HashSet::new();
     let mut queries = Vec::new();
 
@@ -37,18 +36,13 @@ pub fn generate_queries(config: &SearchConfiguration) -> Vec<String> {
             continue;
         }
         for location in &locations {
-            for role in &roles {
-                let mut parts = vec![format!("site:{normalized_site}")];
-                if !location.value.trim().is_empty() {
-                    parts.push(quote_term(&location.value));
-                }
-                if !role.value.trim().is_empty() {
-                    parts.push(quote_term(&role.value));
-                }
-                let query = parts.join(" ");
-                if seen.insert(query.clone()) {
-                    queries.push(query);
-                }
+            let mut parts = vec![format!("site:{normalized_site}")];
+            if !location.value.trim().is_empty() {
+                parts.push(quote_term(&location.value));
+            }
+            let query = parts.join(" ");
+            if seen.insert(query.clone()) {
+                queries.push(query);
             }
         }
     }
@@ -72,7 +66,6 @@ pub fn preview(
         queries,
         enabled_sites: enabled(&config.sites).len(),
         enabled_locations: enabled(&config.locations).len(),
-        enabled_roles: enabled(&config.roles).len(),
         total_requests,
         estimated_monthly_requests,
         estimated_cost: cost_per_request.map(|cost| total_requests as f64 * cost),
@@ -96,14 +89,13 @@ mod tests {
         let config = SearchConfiguration {
             sites: vec![item("https://jobs.example.com/", true)],
             locations: vec![item("Remote", true), item("Uruguay", true)],
-            roles: vec![item("QA", true), item("SDET", false)],
             pages_per_query: 2,
         };
         assert_eq!(
             generate_queries(&config),
             vec![
-                "site:jobs.example.com \"Remote\" \"QA\"",
-                "site:jobs.example.com \"Uruguay\" \"QA\""
+                "site:jobs.example.com \"Remote\"",
+                "site:jobs.example.com \"Uruguay\""
             ]
         );
     }
@@ -113,13 +105,9 @@ mod tests {
         let config = SearchConfiguration {
             sites: vec![item("jobs.example.com", true)],
             locations: vec![item("", true)],
-            roles: vec![item("Staff \"QA\"", true)],
             pages_per_query: 1,
         };
-        assert_eq!(
-            generate_queries(&config),
-            vec!["site:jobs.example.com \"Staff \\\"QA\\\"\""]
-        );
+        assert_eq!(generate_queries(&config), vec!["site:jobs.example.com"]);
     }
 
     #[test]
@@ -130,7 +118,6 @@ mod tests {
                 item("https://jobs.example.com/", true),
             ],
             locations: vec![item("Remote", true)],
-            roles: vec![item("QA", true)],
             pages_per_query: 1,
         };
         assert_eq!(generate_queries(&config).len(), 1);

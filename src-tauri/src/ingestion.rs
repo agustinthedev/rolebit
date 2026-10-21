@@ -510,7 +510,10 @@ async fn extract_candidate(
 
 fn current_settings(state: &AppState) -> Result<AppSettings, String> {
     let has_key = secret::get_api_key()?.is_some();
-    state.db.get_settings(env!("CARGO_PKG_VERSION"), has_key)
+    let has_decisions_api_key = secret::get_decisions_api_key()?.is_some();
+    state
+        .db
+        .get_settings(env!("CARGO_PKG_VERSION"), has_key, has_decisions_api_key)
 }
 
 fn build_provider(settings: &AppSettings) -> Result<Provider, String> {

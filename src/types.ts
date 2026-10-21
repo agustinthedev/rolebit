@@ -1,4 +1,4 @@
-export type PageId = "overview" | "opportunities" | "configuration" | "history" | "profile" | "settings";
+export type PageId = "overview" | "opportunities" | "history" | "profile" | "settings";
 
 export interface SearchItem {
   id?: number;
@@ -9,7 +9,6 @@ export interface SearchItem {
 export interface SearchConfiguration {
   sites: SearchItem[];
   locations: SearchItem[];
-  roles: SearchItem[];
   pagesPerQuery: number;
 }
 
@@ -17,7 +16,6 @@ export interface QueryPreview {
   queries: string[];
   enabledSites: number;
   enabledLocations: number;
-  enabledRoles: number;
   totalRequests: number;
   estimatedMonthlyRequests: number;
   estimatedCost?: number;
@@ -48,12 +46,14 @@ export interface AppSettings {
   closeToTray: boolean;
   lastScheduledRunAt?: string;
   hasApiKey: boolean;
+  hasDecisionsApiKey: boolean;
   databasePath: string;
   appVersion: string;
 }
 
-export interface SaveSettingsInput extends Omit<AppSettings, "onboardingComplete" | "hasApiKey" | "databasePath" | "appVersion" | "lastScheduledRunAt"> {
+export interface SaveSettingsInput extends Omit<AppSettings, "onboardingComplete" | "hasApiKey" | "hasDecisionsApiKey" | "databasePath" | "appVersion" | "lastScheduledRunAt"> {
   apiKey?: string;
+  decisionsApiKey?: string;
 }
 
 export interface ProfileExperience {

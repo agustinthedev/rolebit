@@ -13,7 +13,6 @@ const draftKey = "rolebit:onboarding-draft";
 const defaults: SearchConfiguration = {
   sites: ["jobs.ashbyhq.com", "jobs.lever.co", "job-boards.greenhouse.io"].map((value) => ({ value, enabled: true })),
   locations: ["Uruguay", "LATAM", "Remote", "Worldwide"].map((value) => ({ value, enabled: true })),
-  roles: ["QA", "SDET", "Software Engineer", "DevOps", "Product"].map((value) => ({ value, enabled: true })),
   pagesPerQuery: 1,
 };
 
@@ -59,7 +58,7 @@ export function Onboarding({ initialSettings, initialConfiguration, onComplete }
     if (step === 1 && settings.provider === "bright_data" && (!settings.serpZone.trim() || (!apiKey && !initialSettings.hasApiKey))) {
       setError("Enter both your Bright Data API key and SERP zone, or choose local mock mode."); return;
     }
-    if (step === 2 && (preview?.queries.length ?? 0) === 0) { setError("Enable at least one valid site, location, and role combination."); return; }
+    if (step === 2 && (preview?.queries.length ?? 0) === 0) { setError("Enable at least one valid site and location combination."); return; }
     setError(undefined); setStep((value) => Math.min(value + 1, 5));
   };
 
@@ -87,7 +86,7 @@ function ProviderStep({ settings, setSettings, apiKey, setApiKey, hasApiKey, bus
 }
 
 function SearchStep({ configuration, setConfiguration }: { configuration: SearchConfiguration; setConfiguration: (value: SearchConfiguration) => void }) {
-  return <div className="onboarding-panel onboarding-panel--wide"><TechLabel>Step 3 · Search strategy</TechLabel><h2>Build your discovery matrix.</h2><p className="lead">Rolebit combines every enabled site, location, and role. Empty enabled location or role values are supported intentionally.</p><div className="onboarding-lists"><SearchListEditor compact kind="site" title="Sites" description="Job-host domains" items={configuration.sites} onChange={(sites) => setConfiguration({ ...configuration, sites })} onReset={() => setConfiguration({ ...configuration, sites: defaults.sites })} /><SearchListEditor compact kind="location" title="Locations" description="Markets or work modes" items={configuration.locations} onChange={(locations) => setConfiguration({ ...configuration, locations })} onReset={() => setConfiguration({ ...configuration, locations: defaults.locations })} /><SearchListEditor compact kind="role" title="Roles / Terms" description="Titles and keywords" items={configuration.roles} onChange={(roles) => setConfiguration({ ...configuration, roles })} onReset={() => setConfiguration({ ...configuration, roles: defaults.roles })} /></div></div>;
+  return <div className="onboarding-panel onboarding-panel--wide"><TechLabel>Step 3 · Search strategy</TechLabel><h2>Build your discovery matrix.</h2><p className="lead">Rolebit combines every enabled site and location. Empty enabled location values are supported intentionally.</p><div className="onboarding-lists"><SearchListEditor compact kind="site" title="Sites" description="Job-host domains" items={configuration.sites} onChange={(sites) => setConfiguration({ ...configuration, sites })} onReset={() => setConfiguration({ ...configuration, sites: defaults.sites })} /><SearchListEditor compact kind="location" title="Locations" description="Markets or work modes" items={configuration.locations} onChange={(locations) => setConfiguration({ ...configuration, locations })} onReset={() => setConfiguration({ ...configuration, locations: defaults.locations })} /></div></div>;
 }
 
 function ScheduleStep({ settings, setSettings }: { settings: SaveSettingsInput; setSettings: (value: SaveSettingsInput) => void }) {
@@ -95,7 +94,7 @@ function ScheduleStep({ settings, setSettings }: { settings: SaveSettingsInput; 
 }
 
 function ReviewStep({ preview, settings }: { preview?: QueryPreview; settings: SaveSettingsInput }) {
-  return <div className="onboarding-panel"><TechLabel>Step 5 · Review</TechLabel><h2>Everything looks intentional.</h2><p className="lead">Review volume before saving. Completing setup does not start ingestion.</p><div className="review-metrics"><div><span>{preview?.enabledSites ?? 0}</span><small>Enabled sites</small></div><div><span>{preview?.enabledLocations ?? 0}</span><small>Locations</small></div><div><span>{preview?.enabledRoles ?? 0}</span><small>Roles</small></div><div className="review-metrics__accent"><span>{preview?.queries.length ?? 0}</span><small>Search combinations</small></div></div><div className="review-summary"><div><span>Requests per execution</span><strong>{preview?.totalRequests ?? 0}</strong></div><div><span>Estimated monthly requests</span><strong>{settings.scheduleEnabled ? preview?.estimatedMonthlyRequests ?? 0 : "Scheduling off"}</strong></div><div><span>Estimated execution cost</span><strong>{currency(preview?.estimatedCost)}</strong></div><div><span>Provider</span><strong>{settings.provider === "mock" ? "Local mock" : "Bright Data SERP"}</strong></div></div><InlineNotice title="Nothing runs automatically now">You will land on the dashboard with a clear Run Ingestion action.</InlineNotice></div>;
+  return <div className="onboarding-panel"><TechLabel>Step 5 · Review</TechLabel><h2>Everything looks intentional.</h2><p className="lead">Review volume before saving. Completing setup does not start ingestion.</p><div className="review-metrics"><div><span>{preview?.enabledSites ?? 0}</span><small>Enabled sites</small></div><div><span>{preview?.enabledLocations ?? 0}</span><small>Locations</small></div><div className="review-metrics__accent"><span>{preview?.queries.length ?? 0}</span><small>Search combinations</small></div></div><div className="review-summary"><div><span>Requests per execution</span><strong>{preview?.totalRequests ?? 0}</strong></div><div><span>Estimated monthly requests</span><strong>{settings.scheduleEnabled ? preview?.estimatedMonthlyRequests ?? 0 : "Scheduling off"}</strong></div><div><span>Estimated execution cost</span><strong>{currency(preview?.estimatedCost)}</strong></div><div><span>Provider</span><strong>{settings.provider === "mock" ? "Local mock" : "Bright Data SERP"}</strong></div></div><InlineNotice title="Nothing runs automatically now">You will land on the dashboard with a clear Run Ingestion action.</InlineNotice></div>;
 }
 
 function CompleteStep({ preview }: { preview?: QueryPreview }) {
