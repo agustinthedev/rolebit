@@ -56,17 +56,17 @@ export function SettingsPage({ initial, initialConfiguration, onSaved, onConfigu
           <Field label="Provider"><Select value={settings.provider} onChange={(event) => set("provider", event.target.value as SaveSettingsInput["provider"])}><option value="mock">Local mock provider</option><option value="bright_data">Bright Data SERP</option></Select></Field>
           <Field label="SERP zone"><Input value={settings.serpZone} onChange={(event) => set("serpZone", event.target.value)} placeholder="serp_api1" disabled={settings.provider === "mock"} /></Field>
           <Field label="API key" hint={initial.hasApiKey && !removeKey ? "A key is stored in Windows Credential Manager. Enter a value only to replace it." : "Stored securely outside SQLite."}><Input type="password" value={apiKey} onChange={(event) => { setApiKey(event.target.value); setRemoveKey(false); }} placeholder={initial.hasApiKey && !removeKey ? "••••••••••••••••" : "Enter API key"} disabled={settings.provider === "mock"} /></Field>
-          <div className="field-actions"><Button icon={RefreshCw} onClick={test} disabled={settings.provider === "mock" || busy}>Test connection</Button>{initial.hasApiKey && <Button variant="ghost" icon={Trash2} onClick={() => { setApiKey(""); setRemoveKey(true); }}>Remove stored key</Button>}</div>
           <Field label="Google country (gl)" hint="Independent from your Locations list."><Input value={settings.googleGl} onChange={(event) => set("googleGl", event.target.value)} maxLength={4} /></Field>
           <Field label="Google language (hl)"><Input value={settings.googleHl} onChange={(event) => set("googleHl", event.target.value)} maxLength={8} /></Field>
         </div>
+        <div className="credential-actions"><Button icon={RefreshCw} onClick={test} disabled={settings.provider === "mock" || busy}>Test connection</Button>{initial.hasApiKey && <Button variant="ghost" icon={Trash2} onClick={() => { setApiKey(""); setRemoveKey(true); }}>Remove stored key</Button>}</div>
         {settings.provider === "bright_data" && <InlineNotice tone="warning" title="Paid request warning">Connection tests and live ingestions can incur provider charges. Nothing runs merely by saving.</InlineNotice>}
       </SettingsSection>
       <SettingsSection icon={BrainCircuit} label="OpenAI" title="Decisions API">
         <div className="form-grid">
           <Field label="API key" hint={initial.hasDecisionsApiKey && !removeDecisionsKey ? "A key is stored in Windows Credential Manager. Enter a value only to replace it." : "Stored securely outside SQLite."}><Input type="password" value={decisionsApiKey} onChange={(event) => { setDecisionsApiKey(event.target.value); setRemoveDecisionsKey(false); }} placeholder={initial.hasDecisionsApiKey && !removeDecisionsKey ? "••••••••••••••••" : "Enter API key"} /></Field>
-          <div className="field-actions"><Button icon={RefreshCw} onClick={testDecisions} disabled={busy}>Test connection</Button>{initial.hasDecisionsApiKey && <Button variant="ghost" icon={Trash2} onClick={() => { setDecisionsApiKey(""); setRemoveDecisionsKey(true); }}>Remove stored key</Button>}</div>
         </div>
+        <div className="credential-actions"><Button icon={RefreshCw} onClick={testDecisions} disabled={busy}>Test connection</Button>{initial.hasDecisionsApiKey && <Button variant="ghost" icon={Trash2} onClick={() => { setDecisionsApiKey(""); setRemoveDecisionsKey(true); }}>Remove stored key</Button>}</div>
         <InlineNotice tone="warning" title="Explicit test only">A connection test sends one minimal decision to OpenAI and may incur a small API charge.</InlineNotice>
       </SettingsSection>
       <SettingsSection icon={SlidersHorizontal} label="Ingestion" title="Request controls">
