@@ -114,14 +114,23 @@ function generatedQueries(configuration: SearchConfiguration): string[] {
   const values = (items: SearchConfiguration["sites"]) => items.filter((item) => item.enabled);
   const seen = new Set<string>();
   for (const site of values(configuration.sites)) {
-    const domain = site.value.trim().replace(/^https?:\/\//, "").replace(/\/$/, "").split("/")[0].toLowerCase();
-    if (!domain) continue;
+    const normalizedSite = normalizeSite(site.value);
+    if (!normalizedSite) continue;
     for (const location of values(configuration.locations)) {
       const quote = (value: string) => `"${value.trim().replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
-      seen.add([`site:${domain}`, location.value.trim() && quote(location.value)].filter(Boolean).join(" "));
+      seen.add([`site:${normalizedSite}`, location.value.trim() && quote(location.value)].filter(Boolean).join(" "));
     }
   }
   return [...seen];
+}
+
+function normalizeSite(value: string): string {
+  const withoutScheme = value.trim().replace(/^https?:\/\//i, "");
+  const withoutQuery = withoutScheme.split(/[?#]/, 1)[0].replace(/\/+$/, "");
+  const slashIndex = withoutQuery.indexOf("/");
+  const host = (slashIndex === -1 ? withoutQuery : withoutQuery.slice(0, slashIndex)).trim().replace(/\.$/, "").toLowerCase();
+  const path = slashIndex === -1 ? "" : withoutQuery.slice(slashIndex).replace(/^\/+|\/+$/g, "");
+  return host ? `${host}${path ? `/${path}` : ""}` : "";
 }
 
 function preview(input: QueryPreviewInput): QueryPreview {

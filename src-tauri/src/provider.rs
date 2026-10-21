@@ -4,9 +4,11 @@ use reqwest::{Client, StatusCode, header::CONTENT_TYPE};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::time::sleep;
-use url::Url;
 
-use crate::models::{AppSettings, SearchResult};
+use crate::{
+    models::{AppSettings, SearchResult},
+    query::{SitePattern, site_pattern_from_query},
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct SearchResponse {
@@ -161,12 +163,25 @@ pub fn mock_results(query: &str, page: u32) -> Vec<SearchResult> {
         return Vec::new();
     }
     let digest = hex::encode(Sha256::digest(query.as_bytes()));
-    let site = query
-        .split_whitespace()
-        .find_map(|part| part.strip_prefix("site:"))
-        .unwrap_or("jobs.example.com");
+    let site = site_pattern_from_query(query).unwrap_or_else(|| SitePattern {
+        host: "jobs.example.com".into(),
+        port: None,
+        path: String::new(),
+    });
+    let authority = site
+        .port
+        .map(|port| format!("{}:{port}", site.host))
+        .unwrap_or_else(|| site.host.clone());
+    let path = if site.path.is_empty() {
+        format!("/rolebit-demo/{}", &digest[..12])
+    } else if site.path.contains('*') {
+        site.path
+            .replace('*', &format!("rolebit-demo-{}", &digest[..6]))
+    } else {
+        format!("{}/rolebit-demo-{}", site.path, &digest[..12])
+    };
     vec![SearchResult {
-        url: format!("https://{site}/rolebit-demo/{}", &digest[..12]),
+        url: format!("https://{authority}{path}"),
         title: Some(format!(
             "{} — sample opportunity",
             quoted_terms(query)
@@ -303,29 +318,23 @@ async fn retry_delay(attempt: &mut u32) {
 }
 
 fn validate_effective_query(query: &str, response: &ParsedSerpResponse) -> Option<String> {
-    let expected = site_host_from_query(query)?;
+    let expected = site_pattern_from_query(query)?;
     let effective = response
         .effective_query
         .as_deref()
         .or(response.detected_query.as_deref())?;
-    let actual = site_host_from_query(effective);
-    if actual.as_deref() != Some(expected.as_str()) {
+    let actual = site_pattern_from_query(effective);
+    if actual.as_ref() != Some(&expected) {
         return Some(format!(
-            "Bright Data changed the effective query site from {expected} to {}",
-            actual.as_deref().unwrap_or("<none>")
+            "Bright Data changed the effective query site from {} to {}",
+            expected.normalized(),
+            actual
+                .as_ref()
+                .map(SitePattern::normalized)
+                .unwrap_or_else(|| "<none>".into())
         ));
     }
     None
-}
-
-fn site_host_from_query(query: &str) -> Option<String> {
-    query.split_whitespace().find_map(|part| {
-        let value = part.strip_prefix("site:")?.trim_matches(['"', '\'']);
-        let value = value.trim_end_matches('/');
-        let url = Url::parse(&format!("https://{value}")).ok()?;
-        url.host_str()
-            .map(|host| host.trim_end_matches('.').to_ascii_lowercase())
-    })
 }
 
 fn concise(value: &str) -> String {
@@ -404,10 +413,39 @@ mod tests {
     }
 
     #[test]
+    fn detects_effective_query_path_changes() {
+        let response = parse_serp_response_details(
+            r#"{"general":{"query":"site:job-boards.greenhouse.io QA"},"organic":[]}"#,
+        )
+        .unwrap();
+        assert!(
+            validate_effective_query("site:job-boards.greenhouse.io/*/jobs/* QA", &response)
+                .is_some()
+        );
+    }
+
+    #[test]
     fn builds_distinct_mock_pages_without_paid_requests() {
         let query = r#"site:jobs.example.com "Remote" "QA Engineer""#;
         assert_eq!(mock_results(query, 1).len(), 1);
         assert!(mock_results(query, 2).is_empty());
+    }
+
+    #[test]
+    fn keeps_fixed_mock_site_paths_distinct_per_query() {
+        let first = mock_results(r#"site:jobs.example.com/jobs "Remote""#, 1);
+        let second = mock_results(r#"site:jobs.example.com/jobs "Uruguay""#, 1);
+        assert_ne!(first[0].url, second[0].url);
+        assert!(
+            first[0]
+                .url
+                .starts_with("https://jobs.example.com/jobs/rolebit-demo-")
+        );
+        assert!(
+            second[0]
+                .url
+                .starts_with("https://jobs.example.com/jobs/rolebit-demo-")
+        );
     }
 
     #[test]
