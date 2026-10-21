@@ -78,10 +78,7 @@ fn explicit_port(value: &str) -> Option<u16> {
         .unwrap_or(authority);
     if let Some(rest) = authority.strip_prefix('[') {
         let closing_bracket = rest.find(']')?;
-        return rest[closing_bracket + 1..]
-            .strip_prefix(':')?
-            .parse()
-            .ok();
+        return rest[closing_bracket + 1..].strip_prefix(':')?.parse().ok();
     }
     authority.rsplit_once(':')?.1.parse().ok()
 }
