@@ -11,7 +11,7 @@ const defaultItems = {
   locations: ["Uruguay", "LATAM", "Remote", "Worldwide"].map((value) => ({ value, enabled: true })),
 };
 
-export function SearchConfigurationSection({ initial, settings, onSaved }: { initial: SearchConfiguration; settings: AppSettings; onSaved: (configuration: SearchConfiguration) => void; onRun?: () => void }) {
+export function SearchConfigurationSection({ initial, settings, onSaved }: { initial: SearchConfiguration; settings: AppSettings; onSaved: (configuration: SearchConfiguration) => void }) {
   const [configuration, setConfiguration] = useState(initial);
   const [savedConfiguration, setSavedConfiguration] = useState(initial);
   const [preview, setPreview] = useState<QueryPreview>();

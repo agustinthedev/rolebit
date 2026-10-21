@@ -11,7 +11,7 @@ function editable(settings: AppSettings): SaveSettingsInput {
   return { provider, serpZone, googleGl, googleHl, requestConcurrency, requestTimeoutSeconds, retryCount, pagesPerQuery, estimatedCostPerRequest, requestBudget, scheduleEnabled, scheduleIntervalHours, runOnStartup, startWithWindows, closeToTray };
 }
 
-export function SettingsPage({ initial, initialConfiguration, onSaved, onConfigurationSaved, onRun }: { initial: AppSettings; initialConfiguration: import("../types").SearchConfiguration; onSaved: (settings: AppSettings) => void; onConfigurationSaved: (configuration: import("../types").SearchConfiguration) => void; onRun: () => void }) {
+export function SettingsPage({ initial, initialConfiguration, onSaved, onConfigurationSaved }: { initial: AppSettings; initialConfiguration: import("../types").SearchConfiguration; onSaved: (settings: AppSettings) => void; onConfigurationSaved: (configuration: import("../types").SearchConfiguration) => void }) {
   const [settings, setSettings] = useState(editable(initial));
   const [apiKey, setApiKey] = useState("");
   const [removeKey, setRemoveKey] = useState(false);
