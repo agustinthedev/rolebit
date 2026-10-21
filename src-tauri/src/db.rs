@@ -9,8 +9,9 @@ use sha2::{Digest, Sha256};
 
 use crate::models::{
     ActivityDay, AppSettings, CandidateJob, Diagnostics, IngestionRun, IngestionRunDetail,
-    JobDetail, JobDiscovery, JobFacets, JobListRequest, JobPage, JobSummary, QueryExecution,
-    SaveSettingsInput, SearchConfiguration, SearchItem,
+    JobDetail, JobDiscovery, JobFacets, JobListRequest, JobPage, JobSummary, Profile,
+    ProfileCertification, ProfileEducation, ProfileExperience, ProfileLanguage, ProfileProject,
+    ProfileSkill, QueryExecution, SaveSettingsInput, SearchConfiguration, SearchItem,
 };
 
 const MIGRATION_1: &str = r#"
@@ -185,6 +186,99 @@ ALTER TABLE ingestion_runs ADD COLUMN filtered_results INTEGER NOT NULL DEFAULT 
 ALTER TABLE query_executions ADD COLUMN filtered_count INTEGER NOT NULL DEFAULT 0;
 "#;
 
+const MIGRATION_3: &str = r#"
+CREATE TABLE IF NOT EXISTS profile (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  full_name TEXT NOT NULL DEFAULT '',
+  preferred_name TEXT,
+  headline TEXT,
+  summary TEXT,
+  email TEXT,
+  phone TEXT,
+  location TEXT,
+  country TEXT,
+  address TEXT,
+  linkedin_url TEXT,
+  github_url TEXT,
+  portfolio_url TEXT,
+  work_authorization TEXT,
+  availability TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS profile_experiences (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  profile_id INTEGER NOT NULL REFERENCES profile(id) ON DELETE CASCADE,
+  company TEXT NOT NULL,
+  title TEXT NOT NULL,
+  location TEXT,
+  start_date TEXT,
+  end_date TEXT,
+  current INTEGER NOT NULL DEFAULT 0 CHECK(current IN (0, 1)),
+  description TEXT,
+  sort_order INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS profile_education (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  profile_id INTEGER NOT NULL REFERENCES profile(id) ON DELETE CASCADE,
+  institution TEXT NOT NULL,
+  degree TEXT,
+  field_of_study TEXT,
+  location TEXT,
+  start_date TEXT,
+  end_date TEXT,
+  description TEXT,
+  sort_order INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS profile_projects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  profile_id INTEGER NOT NULL REFERENCES profile(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  role TEXT,
+  url TEXT,
+  technologies TEXT,
+  description TEXT,
+  sort_order INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS profile_skills (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  profile_id INTEGER NOT NULL REFERENCES profile(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  category TEXT,
+  level TEXT,
+  sort_order INTEGER NOT NULL,
+  UNIQUE(profile_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS profile_languages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  profile_id INTEGER NOT NULL REFERENCES profile(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  proficiency TEXT,
+  sort_order INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS profile_certifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  profile_id INTEGER NOT NULL REFERENCES profile(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  issuer TEXT,
+  issue_date TEXT,
+  credential_url TEXT,
+  sort_order INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_profile_experiences_order ON profile_experiences(profile_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_profile_education_order ON profile_education(profile_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_profile_projects_order ON profile_projects(profile_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_profile_skills_order ON profile_skills(profile_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_profile_languages_order ON profile_languages(profile_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_profile_certifications_order ON profile_certifications(profile_id, sort_order);
+"#;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpsertOutcome {
     New,
@@ -232,6 +326,17 @@ impl Database {
             transaction
                 .execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES(2, ?1)",
+                    [now()],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        if current_version < 3 {
+            transaction
+                .execute_batch(MIGRATION_3)
+                .map_err(|error| error.to_string())?;
+            transaction
+                .execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES(3, ?1)",
                     [now()],
                 )
                 .map_err(|error| error.to_string())?;
@@ -314,6 +419,210 @@ impl Database {
             &config.pages_per_query.to_string(),
         )?;
         transaction.commit().map_err(|error| error.to_string())
+    }
+
+    pub fn get_profile(&self) -> Result<Profile, String> {
+        let connection = self.connect()?;
+        let mut profile = connection
+            .query_row(
+                "SELECT full_name,preferred_name,headline,summary,email,phone,location,country,address,linkedin_url,github_url,portfolio_url,work_authorization,availability,updated_at FROM profile WHERE id=1",
+                [],
+                |row| {
+                    Ok(Profile {
+                        full_name: row.get(0)?,
+                        preferred_name: row.get(1)?,
+                        headline: row.get(2)?,
+                        summary: row.get(3)?,
+                        email: row.get(4)?,
+                        phone: row.get(5)?,
+                        location: row.get(6)?,
+                        country: row.get(7)?,
+                        address: row.get(8)?,
+                        linkedin_url: row.get(9)?,
+                        github_url: row.get(10)?,
+                        portfolio_url: row.get(11)?,
+                        work_authorization: row.get(12)?,
+                        availability: row.get(13)?,
+                        experiences: Vec::new(),
+                        education: Vec::new(),
+                        projects: Vec::new(),
+                        skills: Vec::new(),
+                        languages: Vec::new(),
+                        certifications: Vec::new(),
+                        updated_at: row.get(14)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default();
+
+        profile.experiences = connection
+            .prepare("SELECT id,company,title,location,start_date,end_date,current,description FROM profile_experiences WHERE profile_id=1 ORDER BY sort_order,id")
+            .map_err(|error| error.to_string())?
+            .query_map([], |row| {
+                Ok(ProfileExperience {
+                    id: row.get(0)?, company: row.get(1)?, title: row.get(2)?, location: row.get(3)?,
+                    start_date: row.get(4)?, end_date: row.get(5)?, current: row.get(6)?, description: row.get(7)?,
+                })
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        profile.education = connection
+            .prepare("SELECT id,institution,degree,field_of_study,location,start_date,end_date,description FROM profile_education WHERE profile_id=1 ORDER BY sort_order,id")
+            .map_err(|error| error.to_string())?
+            .query_map([], |row| {
+                Ok(ProfileEducation {
+                    id: row.get(0)?, institution: row.get(1)?, degree: row.get(2)?, field_of_study: row.get(3)?,
+                    location: row.get(4)?, start_date: row.get(5)?, end_date: row.get(6)?, description: row.get(7)?,
+                })
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        profile.projects = connection
+            .prepare("SELECT id,name,role,url,technologies,description FROM profile_projects WHERE profile_id=1 ORDER BY sort_order,id")
+            .map_err(|error| error.to_string())?
+            .query_map([], |row| {
+                Ok(ProfileProject {
+                    id: row.get(0)?, name: row.get(1)?, role: row.get(2)?, url: row.get(3)?, technologies: row.get(4)?, description: row.get(5)?,
+                })
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        profile.skills = connection
+            .prepare("SELECT id,name,category,level FROM profile_skills WHERE profile_id=1 ORDER BY sort_order,id")
+            .map_err(|error| error.to_string())?
+            .query_map([], |row| {
+                Ok(ProfileSkill { id: row.get(0)?, name: row.get(1)?, category: row.get(2)?, level: row.get(3)? })
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        profile.languages = connection
+            .prepare("SELECT id,name,proficiency FROM profile_languages WHERE profile_id=1 ORDER BY sort_order,id")
+            .map_err(|error| error.to_string())?
+            .query_map([], |row| {
+                Ok(ProfileLanguage {
+                    id: row.get(0)?, name: row.get(1)?, proficiency: row.get(2)?,
+                })
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        profile.certifications = connection
+            .prepare("SELECT id,name,issuer,issue_date,credential_url FROM profile_certifications WHERE profile_id=1 ORDER BY sort_order,id")
+            .map_err(|error| error.to_string())?
+            .query_map([], |row| {
+                Ok(ProfileCertification {
+                    id: row.get(0)?, name: row.get(1)?, issuer: row.get(2)?, issue_date: row.get(3)?, credential_url: row.get(4)?,
+                })
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        Ok(profile)
+    }
+
+    pub fn save_profile(&self, profile: &Profile) -> Result<Profile, String> {
+        validate_profile(profile)?;
+        let full_name = profile.full_name.trim();
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| error.to_string())?;
+        let timestamp = now();
+        transaction.execute(
+            "INSERT INTO profile(id,full_name,preferred_name,headline,summary,email,phone,location,country,address,linkedin_url,github_url,portfolio_url,work_authorization,availability,updated_at)
+             VALUES(1,?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+             ON CONFLICT(id) DO UPDATE SET full_name=excluded.full_name,preferred_name=excluded.preferred_name,headline=excluded.headline,summary=excluded.summary,email=excluded.email,phone=excluded.phone,location=excluded.location,country=excluded.country,address=excluded.address,linkedin_url=excluded.linkedin_url,github_url=excluded.github_url,portfolio_url=excluded.portfolio_url,work_authorization=excluded.work_authorization,availability=excluded.availability,updated_at=excluded.updated_at",
+            params![
+                full_name,
+                optional_text(profile.preferred_name.as_deref()),
+                optional_text(profile.headline.as_deref()),
+                optional_text(profile.summary.as_deref()),
+                optional_text(profile.email.as_deref()),
+                optional_text(profile.phone.as_deref()),
+                optional_text(profile.location.as_deref()),
+                optional_text(profile.country.as_deref()),
+                optional_text(profile.address.as_deref()),
+                optional_text(profile.linkedin_url.as_deref()),
+                optional_text(profile.github_url.as_deref()),
+                optional_text(profile.portfolio_url.as_deref()),
+                optional_text(profile.work_authorization.as_deref()),
+                optional_text(profile.availability.as_deref()),
+                timestamp,
+            ],
+        ).map_err(|error| error.to_string())?;
+        transaction
+            .execute("DELETE FROM profile_experiences WHERE profile_id=1", [])
+            .map_err(|error| error.to_string())?;
+        transaction
+            .execute("DELETE FROM profile_education WHERE profile_id=1", [])
+            .map_err(|error| error.to_string())?;
+        transaction
+            .execute("DELETE FROM profile_projects WHERE profile_id=1", [])
+            .map_err(|error| error.to_string())?;
+        transaction
+            .execute("DELETE FROM profile_skills WHERE profile_id=1", [])
+            .map_err(|error| error.to_string())?;
+        transaction
+            .execute("DELETE FROM profile_languages WHERE profile_id=1", [])
+            .map_err(|error| error.to_string())?;
+        transaction
+            .execute("DELETE FROM profile_certifications WHERE profile_id=1", [])
+            .map_err(|error| error.to_string())?;
+        for (index, item) in
+            profile.experiences.iter().enumerate().filter(|(_, item)| {
+                !item.company.trim().is_empty() || !item.title.trim().is_empty()
+            })
+        {
+            transaction.execute("INSERT INTO profile_experiences(profile_id,company,title,location,start_date,end_date,current,description,sort_order) VALUES(1,?1,?2,?3,?4,?5,?6,?7,?8)", params![item.company.trim(), item.title.trim(), optional_text(item.location.as_deref()), optional_text(item.start_date.as_deref()), optional_text(item.end_date.as_deref()), item.current, optional_text(item.description.as_deref()), index as i64]).map_err(|error| error.to_string())?;
+        }
+        for (index, item) in profile
+            .education
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| !item.institution.trim().is_empty())
+        {
+            transaction.execute("INSERT INTO profile_education(profile_id,institution,degree,field_of_study,location,start_date,end_date,description,sort_order) VALUES(1,?1,?2,?3,?4,?5,?6,?7,?8)", params![item.institution.trim(), optional_text(item.degree.as_deref()), optional_text(item.field_of_study.as_deref()), optional_text(item.location.as_deref()), optional_text(item.start_date.as_deref()), optional_text(item.end_date.as_deref()), optional_text(item.description.as_deref()), index as i64]).map_err(|error| error.to_string())?;
+        }
+        for (index, item) in profile
+            .projects
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| !item.name.trim().is_empty())
+        {
+            transaction.execute("INSERT INTO profile_projects(profile_id,name,role,url,technologies,description,sort_order) VALUES(1,?1,?2,?3,?4,?5,?6)", params![item.name.trim(), optional_text(item.role.as_deref()), optional_text(item.url.as_deref()), optional_text(item.technologies.as_deref()), optional_text(item.description.as_deref()), index as i64]).map_err(|error| error.to_string())?;
+        }
+        for (index, item) in profile
+            .skills
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| !item.name.trim().is_empty())
+        {
+            transaction.execute("INSERT OR IGNORE INTO profile_skills(profile_id,name,category,level,sort_order) VALUES(1,?1,?2,?3,?4)", params![item.name.trim(), optional_text(item.category.as_deref()), optional_text(item.level.as_deref()), index as i64]).map_err(|error| error.to_string())?;
+        }
+        for (index, item) in profile
+            .languages
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| !item.name.trim().is_empty())
+        {
+            transaction.execute("INSERT INTO profile_languages(profile_id,name,proficiency,sort_order) VALUES(1,?1,?2,?3)", params![item.name.trim(), optional_text(item.proficiency.as_deref()), index as i64]).map_err(|error| error.to_string())?;
+        }
+        for (index, item) in profile
+            .certifications
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| !item.name.trim().is_empty())
+        {
+            transaction.execute("INSERT INTO profile_certifications(profile_id,name,issuer,issue_date,credential_url,sort_order) VALUES(1,?1,?2,?3,?4,?5)", params![item.name.trim(), optional_text(item.issuer.as_deref()), optional_text(item.issue_date.as_deref()), optional_text(item.credential_url.as_deref()), index as i64]).map_err(|error| error.to_string())?;
+        }
+        transaction.commit().map_err(|error| error.to_string())?;
+        self.get_profile()
     }
 
     pub fn get_settings(
@@ -1104,6 +1413,110 @@ fn set_setting(connection: &Connection, key: &str, value: &str) -> Result<(), St
     Ok(())
 }
 
+fn optional_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn has_profile_text(values: &[&str]) -> bool {
+    values.iter().any(|value| !value.trim().is_empty())
+}
+
+fn validate_profile(profile: &Profile) -> Result<(), String> {
+    if profile.full_name.trim().is_empty() {
+        return Err("Your full name is required.".into());
+    }
+    for (index, item) in profile.experiences.iter().enumerate() {
+        if !item.current
+            && !has_profile_text(&[
+                &item.company,
+                &item.title,
+                item.location.as_deref().unwrap_or_default(),
+                item.start_date.as_deref().unwrap_or_default(),
+                item.end_date.as_deref().unwrap_or_default(),
+                item.description.as_deref().unwrap_or_default(),
+            ])
+        {
+            continue;
+        }
+        if item.company.trim().is_empty() {
+            return Err(format!("Experience entry {} needs a company.", index + 1));
+        }
+        if item.title.trim().is_empty() {
+            return Err(format!("Experience entry {} needs a title.", index + 1));
+        }
+    }
+    for (index, item) in profile.education.iter().enumerate() {
+        if !has_profile_text(&[
+            &item.institution,
+            item.degree.as_deref().unwrap_or_default(),
+            item.field_of_study.as_deref().unwrap_or_default(),
+            item.location.as_deref().unwrap_or_default(),
+            item.start_date.as_deref().unwrap_or_default(),
+            item.end_date.as_deref().unwrap_or_default(),
+            item.description.as_deref().unwrap_or_default(),
+        ]) {
+            continue;
+        }
+        if item.institution.trim().is_empty() {
+            return Err(format!(
+                "Education entry {} needs an institution.",
+                index + 1
+            ));
+        }
+    }
+    for (index, item) in profile.projects.iter().enumerate() {
+        if !has_profile_text(&[
+            &item.name,
+            item.role.as_deref().unwrap_or_default(),
+            item.url.as_deref().unwrap_or_default(),
+            item.technologies.as_deref().unwrap_or_default(),
+            item.description.as_deref().unwrap_or_default(),
+        ]) {
+            continue;
+        }
+        if item.name.trim().is_empty() {
+            return Err(format!("Project entry {} needs a name.", index + 1));
+        }
+    }
+    for (index, item) in profile.skills.iter().enumerate() {
+        if !has_profile_text(&[
+            &item.name,
+            item.category.as_deref().unwrap_or_default(),
+            item.level.as_deref().unwrap_or_default(),
+        ]) {
+            continue;
+        }
+        if item.name.trim().is_empty() {
+            return Err(format!("Skill entry {} needs a name.", index + 1));
+        }
+    }
+    for (index, item) in profile.languages.iter().enumerate() {
+        if !has_profile_text(&[&item.name, item.proficiency.as_deref().unwrap_or_default()]) {
+            continue;
+        }
+        if item.name.trim().is_empty() {
+            return Err(format!("Language entry {} needs a language.", index + 1));
+        }
+    }
+    for (index, item) in profile.certifications.iter().enumerate() {
+        if !has_profile_text(&[
+            &item.name,
+            item.issuer.as_deref().unwrap_or_default(),
+            item.issue_date.as_deref().unwrap_or_default(),
+            item.credential_url.as_deref().unwrap_or_default(),
+        ]) {
+            continue;
+        }
+        if item.name.trim().is_empty() {
+            return Err(format!("Certification entry {} needs a name.", index + 1));
+        }
+    }
+    Ok(())
+}
+
 fn setting(connection: &Connection, key: &str, default: &str) -> Result<String, String> {
     Ok(setting_optional(connection, key)?.unwrap_or_else(|| default.to_string()))
 }
@@ -1296,7 +1709,7 @@ mod tests {
         let configuration = database.get_configuration().unwrap();
         assert_eq!(configuration.sites.len(), 3);
         assert_eq!(crate::query::generate_queries(&configuration).len(), 60);
-        assert_eq!(database.diagnostics("test").unwrap().schema_version, 2);
+        assert_eq!(database.diagnostics("test").unwrap().schema_version, 3);
         drop(database);
         fs::remove_dir_all(directory).unwrap();
     }
@@ -1324,7 +1737,7 @@ mod tests {
         drop(connection);
 
         let database = Database::initialize(path).unwrap();
-        assert_eq!(database.diagnostics("test").unwrap().schema_version, 2);
+        assert_eq!(database.diagnostics("test").unwrap().schema_version, 3);
         let connection = database.connect().unwrap();
         assert!(
             connection
@@ -1520,6 +1933,152 @@ mod tests {
         let run = database.list_runs(10).unwrap().remove(0);
         assert_eq!(run.status, "interrupted");
         assert!(run.completed_at.is_some());
+        drop(database);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn persists_profile_sections_and_replaces_removed_entries() {
+        let (database, directory) = test_database("profile");
+        let mut profile = Profile {
+            full_name: "  Ada Lovelace  ".into(),
+            headline: Some("Analytical engineer".into()),
+            experiences: vec![ProfileExperience {
+                company: "Example Labs".into(),
+                title: "Staff Engineer".into(),
+                current: true,
+                ..Default::default()
+            }],
+            projects: vec![ProfileProject {
+                name: "Rolebit".into(),
+                ..Default::default()
+            }],
+            skills: vec![ProfileSkill {
+                name: "Rust".into(),
+                level: Some("advanced".into()),
+                ..Default::default()
+            }],
+            languages: vec![ProfileLanguage {
+                name: "English".into(),
+                proficiency: Some("professional".into()),
+                ..Default::default()
+            }],
+            certifications: vec![ProfileCertification {
+                name: "Rust Foundation".into(),
+                issuer: Some("Rust Foundation".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let saved = database.save_profile(&profile).unwrap();
+        assert_eq!(saved.full_name, "Ada Lovelace");
+        assert_eq!(saved.experiences.len(), 1);
+        assert_eq!(saved.projects.len(), 1);
+        assert_eq!(saved.skills[0].name, "Rust");
+        assert_eq!(saved.languages[0].name, "English");
+        assert_eq!(
+            saved.certifications[0].issuer.as_deref(),
+            Some("Rust Foundation")
+        );
+
+        profile.experiences.clear();
+        profile.skills.push(ProfileSkill {
+            name: "TypeScript".into(),
+            ..Default::default()
+        });
+        let saved = database.save_profile(&profile).unwrap();
+        assert!(saved.experiences.is_empty());
+        assert_eq!(saved.skills.len(), 2);
+        drop(database);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn rejects_incomplete_profile_entries_without_replacing_saved_profile() {
+        let (database, directory) = test_database("profile-validation");
+        database
+            .save_profile(&Profile {
+                full_name: "Ada Lovelace".into(),
+                education: vec![ProfileEducation {
+                    institution: "Analytical University".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        let cases = vec![
+            (
+                "Experience entry 1 needs a company.",
+                Profile {
+                    full_name: "Ada Lovelace".into(),
+                    experiences: vec![ProfileExperience {
+                        title: "Engineer".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ),
+            (
+                "Education entry 1 needs an institution.",
+                Profile {
+                    full_name: "Ada Lovelace".into(),
+                    education: vec![ProfileEducation {
+                        degree: Some("Computer Science".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ),
+            (
+                "Project entry 1 needs a name.",
+                Profile {
+                    full_name: "Ada Lovelace".into(),
+                    projects: vec![ProfileProject {
+                        url: Some("https://example.com".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ),
+            (
+                "Skill entry 1 needs a name.",
+                Profile {
+                    full_name: "Ada Lovelace".into(),
+                    skills: vec![ProfileSkill {
+                        category: Some("Languages".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ),
+            (
+                "Language entry 1 needs a language.",
+                Profile {
+                    full_name: "Ada Lovelace".into(),
+                    languages: vec![ProfileLanguage {
+                        proficiency: Some("Fluent".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ),
+            (
+                "Certification entry 1 needs a name.",
+                Profile {
+                    full_name: "Ada Lovelace".into(),
+                    certifications: vec![ProfileCertification {
+                        issuer: Some("Rust Foundation".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ),
+        ];
+        for (message, profile) in cases {
+            assert_eq!(database.save_profile(&profile).unwrap_err(), message);
+        }
+        let saved = database.get_profile().unwrap();
+        assert_eq!(saved.education[0].institution, "Analytical University");
         drop(database);
         fs::remove_dir_all(directory).unwrap();
     }

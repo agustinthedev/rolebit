@@ -41,4 +41,30 @@ describe("browser preview data boundary", () => {
     const twelveHours = await api.previewQueries({ configuration, scheduleIntervalHours: 12 });
     expect(sixHours.estimatedMonthlyRequests).toBe(2 * twelveHours.estimatedMonthlyRequests);
   });
+
+  it("stores profile data in the local preview boundary", async () => {
+    const profile = await api.saveProfile({
+      fullName: "Ada Lovelace",
+      headline: "Analytical engineer",
+      experiences: [{ company: "Example Labs", title: "Staff Engineer", current: true }],
+      education: [],
+      projects: [{ name: "Rolebit", technologies: "Rust, React" }],
+      skills: [{ name: "Rust", category: "Languages" }],
+      languages: [{ name: "English", proficiency: "professional" }],
+      certifications: [],
+    });
+    expect(profile.fullName).toBe("Ada Lovelace");
+    expect((await api.profile()).experiences[0].company).toBe("Example Labs");
+    expect((await api.profile()).projects[0].name).toBe("Rolebit");
+    expect((await api.profile()).languages[0].proficiency).toBe("professional");
+  });
+
+  it("rejects incomplete profile entries before replacing saved data", async () => {
+    const current = await api.profile();
+    await expect(api.saveProfile({
+      ...current,
+      education: [{ institution: "", degree: "Computer Science" }],
+    })).rejects.toBe("Education entry 1 needs an institution.");
+    expect((await api.profile()).fullName).toBe("Ada Lovelace");
+  });
 });

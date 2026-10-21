@@ -1,4 +1,4 @@
-export type PageId = "overview" | "opportunities" | "configuration" | "history" | "settings";
+export type PageId = "overview" | "opportunities" | "configuration" | "history" | "profile" | "settings";
 
 export interface SearchItem {
   id?: number;
@@ -54,6 +54,82 @@ export interface AppSettings {
 
 export interface SaveSettingsInput extends Omit<AppSettings, "onboardingComplete" | "hasApiKey" | "databasePath" | "appVersion" | "lastScheduledRunAt"> {
   apiKey?: string;
+}
+
+export interface ProfileExperience {
+  id?: number;
+  company: string;
+  title: string;
+  location?: string;
+  startDate?: string;
+  endDate?: string;
+  current: boolean;
+  description?: string;
+}
+
+export interface ProfileEducation {
+  id?: number;
+  institution: string;
+  degree?: string;
+  fieldOfStudy?: string;
+  location?: string;
+  startDate?: string;
+  endDate?: string;
+  description?: string;
+}
+
+export interface ProfileProject {
+  id?: number;
+  name: string;
+  role?: string;
+  url?: string;
+  technologies?: string;
+  description?: string;
+}
+
+export interface ProfileSkill {
+  id?: number;
+  name: string;
+  category?: string;
+  level?: string;
+}
+
+export interface ProfileLanguage {
+  id?: number;
+  name: string;
+  proficiency?: string;
+}
+
+export interface ProfileCertification {
+  id?: number;
+  name: string;
+  issuer?: string;
+  issueDate?: string;
+  credentialUrl?: string;
+}
+
+export interface Profile {
+  fullName: string;
+  preferredName?: string;
+  headline?: string;
+  summary?: string;
+  email?: string;
+  phone?: string;
+  location?: string;
+  country?: string;
+  address?: string;
+  linkedinUrl?: string;
+  githubUrl?: string;
+  portfolioUrl?: string;
+  workAuthorization?: string;
+  availability?: string;
+  experiences: ProfileExperience[];
+  education: ProfileEducation[];
+  projects: ProfileProject[];
+  skills: ProfileSkill[];
+  languages: ProfileLanguage[];
+  certifications: ProfileCertification[];
+  updatedAt?: string;
 }
 
 export interface JobSummary {
