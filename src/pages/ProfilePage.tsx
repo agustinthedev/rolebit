@@ -3,6 +3,7 @@ import { Children, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Button, Field, InlineNotice, Input, PageHeader, Select, SurfaceCard, TechLabel } from "../components/ui";
 import { api } from "../lib/api";
+import { validateProfile } from "../lib/profile";
 import type { Profile, ProfileCertification, ProfileEducation, ProfileExperience, ProfileLanguage, ProfileProject, ProfileSkill } from "../types";
 
 const emptyProfile: Profile = {
@@ -36,6 +37,8 @@ export function ProfilePage() {
   const set = <K extends keyof Profile>(key: K, value: Profile[K]) => setProfile((current) => ({ ...current, [key]: value }));
   const save = async () => {
     setBusy(true); setNotice(undefined); setError(undefined);
+    const validationError = validateProfile(profile);
+    if (validationError) { setError(validationError); setBusy(false); return; }
     try { setProfile(await api.saveProfile(profile)); setNotice("Profile saved locally. Personal identifiers are not sent to matching by default."); }
     catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }

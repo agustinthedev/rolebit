@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { validateProfile } from "./profile";
 import type {
   AppSettings,
   Bootstrap,
@@ -253,7 +254,10 @@ export const api = {
   configuration: () => call<SearchConfiguration>("get_search_configuration"),
   saveConfiguration: (configuration: SearchConfiguration) => call<SearchConfiguration>("save_search_configuration", { configuration }),
   profile: () => call<Profile>("get_profile"),
-  saveProfile: (profile: Profile) => call<Profile>("save_profile", { profile }),
+  saveProfile: (profile: Profile) => {
+    const validationError = validateProfile(profile);
+    return validationError ? Promise.reject(validationError) : call<Profile>("save_profile", { profile });
+  },
   previewQueries: (input: QueryPreviewInput) => call<QueryPreview>("preview_queries", { input }),
   settings: () => call<AppSettings>("get_settings"),
   saveSettings: (settings: SaveSettingsInput) => call<AppSettings>("save_settings", { settings }),

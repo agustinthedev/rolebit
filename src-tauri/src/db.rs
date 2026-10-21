@@ -527,10 +527,8 @@ impl Database {
     }
 
     pub fn save_profile(&self, profile: &Profile) -> Result<Profile, String> {
+        validate_profile(profile)?;
         let full_name = profile.full_name.trim();
-        if full_name.is_empty() {
-            return Err("Your full name is required".into());
-        }
         let mut connection = self.connect()?;
         let transaction = connection
             .transaction()
@@ -1422,6 +1420,103 @@ fn optional_text(value: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+fn has_profile_text(values: &[&str]) -> bool {
+    values.iter().any(|value| !value.trim().is_empty())
+}
+
+fn validate_profile(profile: &Profile) -> Result<(), String> {
+    if profile.full_name.trim().is_empty() {
+        return Err("Your full name is required.".into());
+    }
+    for (index, item) in profile.experiences.iter().enumerate() {
+        if !item.current
+            && !has_profile_text(&[
+                &item.company,
+                &item.title,
+                item.location.as_deref().unwrap_or_default(),
+                item.start_date.as_deref().unwrap_or_default(),
+                item.end_date.as_deref().unwrap_or_default(),
+                item.description.as_deref().unwrap_or_default(),
+            ])
+        {
+            continue;
+        }
+        if item.company.trim().is_empty() {
+            return Err(format!("Experience entry {} needs a company.", index + 1));
+        }
+        if item.title.trim().is_empty() {
+            return Err(format!("Experience entry {} needs a title.", index + 1));
+        }
+    }
+    for (index, item) in profile.education.iter().enumerate() {
+        if !has_profile_text(&[
+            &item.institution,
+            item.degree.as_deref().unwrap_or_default(),
+            item.field_of_study.as_deref().unwrap_or_default(),
+            item.location.as_deref().unwrap_or_default(),
+            item.start_date.as_deref().unwrap_or_default(),
+            item.end_date.as_deref().unwrap_or_default(),
+            item.description.as_deref().unwrap_or_default(),
+        ]) {
+            continue;
+        }
+        if item.institution.trim().is_empty() {
+            return Err(format!(
+                "Education entry {} needs an institution.",
+                index + 1
+            ));
+        }
+    }
+    for (index, item) in profile.projects.iter().enumerate() {
+        if !has_profile_text(&[
+            &item.name,
+            item.role.as_deref().unwrap_or_default(),
+            item.url.as_deref().unwrap_or_default(),
+            item.technologies.as_deref().unwrap_or_default(),
+            item.description.as_deref().unwrap_or_default(),
+        ]) {
+            continue;
+        }
+        if item.name.trim().is_empty() {
+            return Err(format!("Project entry {} needs a name.", index + 1));
+        }
+    }
+    for (index, item) in profile.skills.iter().enumerate() {
+        if !has_profile_text(&[
+            &item.name,
+            item.category.as_deref().unwrap_or_default(),
+            item.level.as_deref().unwrap_or_default(),
+        ]) {
+            continue;
+        }
+        if item.name.trim().is_empty() {
+            return Err(format!("Skill entry {} needs a name.", index + 1));
+        }
+    }
+    for (index, item) in profile.languages.iter().enumerate() {
+        if !has_profile_text(&[&item.name, item.proficiency.as_deref().unwrap_or_default()]) {
+            continue;
+        }
+        if item.name.trim().is_empty() {
+            return Err(format!("Language entry {} needs a language.", index + 1));
+        }
+    }
+    for (index, item) in profile.certifications.iter().enumerate() {
+        if !has_profile_text(&[
+            &item.name,
+            item.issuer.as_deref().unwrap_or_default(),
+            item.issue_date.as_deref().unwrap_or_default(),
+            item.credential_url.as_deref().unwrap_or_default(),
+        ]) {
+            continue;
+        }
+        if item.name.trim().is_empty() {
+            return Err(format!("Certification entry {} needs a name.", index + 1));
+        }
+    }
+    Ok(())
+}
+
 fn setting(connection: &Connection, key: &str, default: &str) -> Result<String, String> {
     Ok(setting_optional(connection, key)?.unwrap_or_else(|| default.to_string()))
 }
@@ -1894,6 +1989,96 @@ mod tests {
         let saved = database.save_profile(&profile).unwrap();
         assert!(saved.experiences.is_empty());
         assert_eq!(saved.skills.len(), 2);
+        drop(database);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn rejects_incomplete_profile_entries_without_replacing_saved_profile() {
+        let (database, directory) = test_database("profile-validation");
+        database
+            .save_profile(&Profile {
+                full_name: "Ada Lovelace".into(),
+                education: vec![ProfileEducation {
+                    institution: "Analytical University".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        let cases = vec![
+            (
+                "Experience entry 1 needs a company.",
+                Profile {
+                    full_name: "Ada Lovelace".into(),
+                    experiences: vec![ProfileExperience {
+                        title: "Engineer".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ),
+            (
+                "Education entry 1 needs an institution.",
+                Profile {
+                    full_name: "Ada Lovelace".into(),
+                    education: vec![ProfileEducation {
+                        degree: Some("Computer Science".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ),
+            (
+                "Project entry 1 needs a name.",
+                Profile {
+                    full_name: "Ada Lovelace".into(),
+                    projects: vec![ProfileProject {
+                        url: Some("https://example.com".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ),
+            (
+                "Skill entry 1 needs a name.",
+                Profile {
+                    full_name: "Ada Lovelace".into(),
+                    skills: vec![ProfileSkill {
+                        category: Some("Languages".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ),
+            (
+                "Language entry 1 needs a language.",
+                Profile {
+                    full_name: "Ada Lovelace".into(),
+                    languages: vec![ProfileLanguage {
+                        proficiency: Some("Fluent".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ),
+            (
+                "Certification entry 1 needs a name.",
+                Profile {
+                    full_name: "Ada Lovelace".into(),
+                    certifications: vec![ProfileCertification {
+                        issuer: Some("Rust Foundation".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ),
+        ];
+        for (message, profile) in cases {
+            assert_eq!(database.save_profile(&profile).unwrap_err(), message);
+        }
+        let saved = database.get_profile().unwrap();
+        assert_eq!(saved.education[0].institution, "Analytical University");
         drop(database);
         fs::remove_dir_all(directory).unwrap();
     }
