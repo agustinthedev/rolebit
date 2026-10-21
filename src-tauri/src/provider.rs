@@ -323,7 +323,8 @@ fn site_host_from_query(query: &str) -> Option<String> {
         let value = part.strip_prefix("site:")?.trim_matches(['"', '\'']);
         let value = value.trim_end_matches('/');
         let url = Url::parse(&format!("https://{value}")).ok()?;
-        url.host_str().map(|host| host.trim_end_matches('.').to_ascii_lowercase())
+        url.host_str()
+            .map(|host| host.trim_end_matches('.').to_ascii_lowercase())
     })
 }
 

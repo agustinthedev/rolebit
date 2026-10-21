@@ -1326,12 +1326,16 @@ mod tests {
         let database = Database::initialize(path).unwrap();
         assert_eq!(database.diagnostics("test").unwrap().schema_version, 2);
         let connection = database.connect().unwrap();
-        assert!(connection
-            .prepare("SELECT filtered_results FROM ingestion_runs")
-            .is_ok());
-        assert!(connection
-            .prepare("SELECT filtered_count FROM query_executions")
-            .is_ok());
+        assert!(
+            connection
+                .prepare("SELECT filtered_results FROM ingestion_runs")
+                .is_ok()
+        );
+        assert!(
+            connection
+                .prepare("SELECT filtered_count FROM query_executions")
+                .is_ok()
+        );
         drop(connection);
         drop(database);
         fs::remove_dir_all(directory).unwrap();
