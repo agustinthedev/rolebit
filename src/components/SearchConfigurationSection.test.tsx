@@ -1,5 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { SearchConfigurationSection } from "./SearchConfigurationSection";
 import type { AppSettings, SearchConfiguration } from "../types";
@@ -34,20 +33,9 @@ const settings: AppSettings = {
 };
 
 describe("SearchConfigurationSection", () => {
-  it("blocks ingestion until edited search strategy changes are saved", async () => {
-    const user = userEvent.setup();
-    const onRun = vi.fn();
-    render(<SearchConfigurationSection initial={configuration} settings={settings} onSaved={vi.fn()} onRun={onRun} />);
-
-    const runButton = screen.getByRole("button", { name: "Run ingestion" });
-    await waitFor(() => expect(runButton).toBeEnabled());
-    await user.clear(screen.getByLabelText("Locations item 1"));
-    await user.type(screen.getByLabelText("Locations item 1"), "LATAM");
-    expect(runButton).toBeDisabled();
-    expect(screen.getByText("Save your edited search strategy before starting an ingestion run.")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
-    await waitFor(() => expect(runButton).toBeEnabled());
-    expect(onRun).not.toHaveBeenCalled();
+  it("keeps the search plan visible without an ingestion action", () => {
+    render(<SearchConfigurationSection initial={configuration} settings={settings} onSaved={vi.fn()} />);
+    expect(screen.getByText("Planned requests")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run ingestion" })).not.toBeInTheDocument();
   });
 });
