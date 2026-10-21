@@ -28,7 +28,7 @@ impl SitePattern {
         }
         Some(Self {
             host,
-            port: parsed.port(),
+            port: explicit_port(value).or_else(|| parsed.port()),
             path: parsed.path().trim_end_matches('/').to_string(),
         })
     }
@@ -68,6 +68,22 @@ impl SitePattern {
             path == self.path || path.starts_with(&format!("{}/", self.path))
         }
     }
+}
+
+fn explicit_port(value: &str) -> Option<u16> {
+    let authority = value.split('/').next()?;
+    let authority = authority
+        .rsplit_once('@')
+        .map(|(_, authority)| authority)
+        .unwrap_or(authority);
+    if let Some(rest) = authority.strip_prefix('[') {
+        let closing_bracket = rest.find(']')?;
+        return rest[closing_bracket + 1..]
+            .strip_prefix(':')?
+            .parse()
+            .ok();
+    }
+    authority.rsplit_once(':')?.1.parse().ok()
 }
 
 pub fn site_pattern_from_query(query: &str) -> Option<SitePattern> {
