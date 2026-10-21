@@ -513,11 +513,6 @@ impl Database {
             .map_err(|error| error.to_string())?;
         insert_items(&transaction, "site", &config.sites)?;
         insert_items(&transaction, "location", &config.locations)?;
-        set_setting(
-            &transaction,
-            "pages_per_query",
-            &config.pages_per_query.to_string(),
-        )?;
         transaction.commit().map_err(|error| error.to_string())
     }
 

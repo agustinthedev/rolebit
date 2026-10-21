@@ -190,7 +190,10 @@ async function demoInvoke<T>(command: string, args: Record<string, unknown> = {}
     case "get_bootstrap": return { settings: demoSettings, configuration: demoConfig, overview: overview(), recentRuns: demoRuns } as T;
     case "get_overview": return overview() as T;
     case "get_search_configuration": return demoConfig as T;
-    case "save_search_configuration": demoConfig = args.configuration as SearchConfiguration; return demoConfig as T;
+    case "save_search_configuration": {
+      demoConfig = { ...(args.configuration as SearchConfiguration), pagesPerQuery: demoSettings.pagesPerQuery };
+      return demoConfig as T;
+    }
     case "get_profile": return demoProfile as T;
     case "save_profile": demoProfile = args.profile as Profile; return demoProfile as T;
     case "preview_queries": return preview(args.input as QueryPreviewInput) as T;
@@ -198,12 +201,13 @@ async function demoInvoke<T>(command: string, args: Record<string, unknown> = {}
     case "save_settings": {
       const input = args.settings as SaveSettingsInput;
       demoSettings = { ...demoSettings, ...input, hasApiKey: Boolean(input.apiKey || demoSettings.hasApiKey), hasDecisionsApiKey: Boolean(input.decisionsApiKey || demoSettings.hasDecisionsApiKey) };
+      demoConfig = { ...demoConfig, pagesPerQuery: demoSettings.pagesPerQuery };
       return demoSettings as T;
     }
     case "complete_onboarding": {
       const input = args.input as { settings: SaveSettingsInput; configuration: SearchConfiguration };
-      demoConfig = input.configuration;
       demoSettings = { ...demoSettings, ...input.settings, onboardingComplete: true, hasApiKey: Boolean(input.settings.apiKey), hasDecisionsApiKey: Boolean(input.settings.decisionsApiKey) };
+      demoConfig = { ...input.configuration, pagesPerQuery: demoSettings.pagesPerQuery };
       return { settings: demoSettings, configuration: demoConfig, overview: overview(), recentRuns: demoRuns } as T;
     }
     case "list_jobs": return listDemoJobs(args.request as JobListRequest) as T;
