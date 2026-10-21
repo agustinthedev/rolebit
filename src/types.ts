@@ -154,6 +154,7 @@ export interface JobSummary {
   seniorityMatch?: number | null;
   locationMatch?: number | null;
   matchError?: string | null;
+  matchRationale?: string | null;
 }
 
 export interface JobDiscovery {
