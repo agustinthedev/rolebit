@@ -85,6 +85,96 @@ pub struct SaveSettingsInput {
     pub close_to_tray: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileExperience {
+    pub id: Option<i64>,
+    pub company: String,
+    pub title: String,
+    pub location: Option<String>,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub current: bool,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileEducation {
+    pub id: Option<i64>,
+    pub institution: String,
+    pub degree: Option<String>,
+    pub field_of_study: Option<String>,
+    pub location: Option<String>,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileProject {
+    pub id: Option<i64>,
+    pub name: String,
+    pub role: Option<String>,
+    pub url: Option<String>,
+    pub technologies: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileSkill {
+    pub id: Option<i64>,
+    pub name: String,
+    pub category: Option<String>,
+    pub level: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileLanguage {
+    pub id: Option<i64>,
+    pub name: String,
+    pub proficiency: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileCertification {
+    pub id: Option<i64>,
+    pub name: String,
+    pub issuer: Option<String>,
+    pub issue_date: Option<String>,
+    pub credential_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Profile {
+    pub full_name: String,
+    pub preferred_name: Option<String>,
+    pub headline: Option<String>,
+    pub summary: Option<String>,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub location: Option<String>,
+    pub country: Option<String>,
+    pub address: Option<String>,
+    pub linkedin_url: Option<String>,
+    pub github_url: Option<String>,
+    pub portfolio_url: Option<String>,
+    pub work_authorization: Option<String>,
+    pub availability: Option<String>,
+    pub experiences: Vec<ProfileExperience>,
+    pub education: Vec<ProfileEducation>,
+    pub projects: Vec<ProfileProject>,
+    pub skills: Vec<ProfileSkill>,
+    pub languages: Vec<ProfileLanguage>,
+    pub certifications: Vec<ProfileCertification>,
+    pub updated_at: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompleteOnboardingInput {

@@ -5,8 +5,8 @@ use crate::{
     ingestion::{AppState, try_start_ingestion},
     models::{
         Bootstrap, CompleteOnboardingInput, Diagnostics, IngestionRun, IngestionRunDetail,
-        JobDetail, JobListRequest, JobPage, QueryPreview, QueryPreviewInput, SaveSettingsInput,
-        SearchConfiguration,
+        JobDetail, JobListRequest, JobPage, Profile, QueryPreview, QueryPreviewInput,
+        SaveSettingsInput, SearchConfiguration,
     },
     provider::BrightDataProvider,
     query, secret,
@@ -35,6 +35,16 @@ pub fn save_search_configuration(
 ) -> Result<SearchConfiguration, String> {
     state.db.save_configuration(&configuration)?;
     state.db.get_configuration()
+}
+
+#[tauri::command]
+pub fn get_profile(state: State<'_, AppState>) -> Result<Profile, String> {
+    state.db.get_profile()
+}
+
+#[tauri::command]
+pub fn save_profile(state: State<'_, AppState>, profile: Profile) -> Result<Profile, String> {
+    state.db.save_profile(&profile)
 }
 
 #[tauri::command]

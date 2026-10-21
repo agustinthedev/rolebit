@@ -62,6 +62,8 @@ pub fn run() {
             commands::get_bootstrap,
             commands::get_search_configuration,
             commands::save_search_configuration,
+            commands::get_profile,
+            commands::save_profile,
             commands::preview_queries,
             commands::get_settings,
             commands::save_settings,
