@@ -309,11 +309,25 @@ ALTER TABLE jobs ADD COLUMN location_match INTEGER;
 ALTER TABLE jobs ADD COLUMN match_error TEXT;
 "#;
 
+const MIGRATION_7: &str = r#"
+ALTER TABLE jobs ADD COLUMN decision_input_hash TEXT;
+ALTER TABLE jobs ADD COLUMN match_profile_hash TEXT;
+"#;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpsertOutcome {
     New,
     Updated,
     Existing,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredDecision {
+    pub decision_input_hash: Option<String>,
+    pub match_profile_hash: Option<String>,
+    pub classification_confidence: Option<f64>,
+    pub matching: Option<OpportunityMatch>,
+    pub match_error: Option<String>,
 }
 
 #[derive(Clone)]
@@ -400,6 +414,17 @@ impl Database {
             transaction
                 .execute(
                     "INSERT INTO schema_migrations(version, applied_at) VALUES(6, ?1)",
+                    [now()],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        if current_version < 7 {
+            transaction
+                .execute_batch(MIGRATION_7)
+                .map_err(|error| error.to_string())?;
+            transaction
+                .execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES(7, ?1)",
                     [now()],
                 )
                 .map_err(|error| error.to_string())?;
@@ -916,6 +941,80 @@ impl Database {
         Ok(())
     }
 
+    pub fn stored_decision(
+        &self,
+        candidate: &CandidateJob,
+    ) -> Result<Option<StoredDecision>, String> {
+        let source_key = candidate
+            .external_id
+            .as_ref()
+            .map(|external_id| format!("{}:{external_id}", candidate.source_domain))
+            .unwrap_or_else(|| candidate.canonical_url.clone());
+        let connection = self.connect()?;
+        let row: Option<(
+            Option<String>,
+            Option<String>,
+            Option<f64>,
+            Option<i64>,
+            Option<f64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<String>,
+        )> = connection
+            .query_row(
+                "SELECT decision_input_hash, match_profile_hash, classification_confidence,
+                 match_score, match_confidence, skills_match, experience_match, seniority_match,
+                 location_match, match_error FROM jobs
+                 WHERE source_key=?1 OR canonical_url=?2 LIMIT 1",
+                params![source_key, candidate.canonical_url],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        Ok(row.map(
+            |(
+                decision_input_hash,
+                match_profile_hash,
+                classification_confidence,
+                overall,
+                confidence,
+                skills,
+                experience,
+                seniority,
+                location,
+                match_error,
+            )| StoredDecision {
+                decision_input_hash,
+                match_profile_hash,
+                classification_confidence,
+                matching: overall.map(|overall| OpportunityMatch {
+                    overall,
+                    confidence,
+                    skills,
+                    experience,
+                    seniority,
+                    location,
+                }),
+                match_error,
+            },
+        ))
+    }
+
     pub fn record_candidate(
         &self,
         run_id: i64,
@@ -927,6 +1026,36 @@ impl Database {
         classification_confidence: Option<f64>,
         matching: Option<&OpportunityMatch>,
         match_error: Option<&str>,
+    ) -> Result<UpsertOutcome, String> {
+        self.record_candidate_with_decision_cache(
+            run_id,
+            execution_id,
+            provider,
+            result_title,
+            snippet,
+            candidate,
+            classification_confidence,
+            matching,
+            match_error,
+            None,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_candidate_with_decision_cache(
+        &self,
+        run_id: i64,
+        execution_id: i64,
+        provider: &str,
+        result_title: Option<&str>,
+        snippet: Option<&str>,
+        candidate: &CandidateJob,
+        classification_confidence: Option<f64>,
+        matching: Option<&OpportunityMatch>,
+        match_error: Option<&str>,
+        decision_input_hash: Option<&str>,
+        match_profile_hash: Option<&str>,
     ) -> Result<UpsertOutcome, String> {
         let mut connection = self.connect()?;
         let transaction = connection
@@ -983,7 +1112,7 @@ impl Database {
                  content_updated=?17, reopened=?13, classification_confidence=?18,
                  match_score=?19, match_confidence=?20, skills_match=?21,
                  experience_match=?22, seniority_match=?23, location_match=?24,
-                 match_error=?25 WHERE id=?1",
+                 match_error=?25, decision_input_hash=?26, match_profile_hash=?27 WHERE id=?1",
                 params![
                     job_id, candidate.canonical_url, candidate.external_id, candidate.source_domain,
                     candidate.title, candidate.company, candidate.description, candidate.location,
@@ -994,6 +1123,8 @@ impl Database {
                     matching.and_then(|score| score.experience), matching.and_then(|score| score.seniority),
                     matching.and_then(|score| score.location),
                     match_error,
+                    decision_input_hash,
+                    match_profile_hash,
                 ],
             ).map_err(|error| error.to_string())?;
             (
@@ -1010,9 +1141,9 @@ impl Database {
                  location, remote_status, employment_type, published_at, expires_at, lifecycle_status,
                  tracking_status, extraction_status, content_hash, first_seen_at, last_seen_at, updated_at,
                  classification_confidence, match_score, match_confidence, skills_match, experience_match,
-                 seniority_match, location_match, match_error)
+                 seniority_match, location_match, match_error, decision_input_hash, match_profile_hash)
                  VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'active', 'new', ?13, ?14, ?15, ?15, ?15,
-                 ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+                 ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
                 params![
                     source_key, candidate.canonical_url, candidate.external_id, candidate.source_domain,
                     candidate.title, candidate.company, candidate.description, candidate.location,
@@ -1023,6 +1154,8 @@ impl Database {
                     matching.and_then(|score| score.experience), matching.and_then(|score| score.seniority),
                     matching.and_then(|score| score.location),
                     match_error,
+                    decision_input_hash,
+                    match_profile_hash,
                 ],
             ).map_err(|error| error.to_string())?;
             (transaction.last_insert_rowid(), UpsertOutcome::New)
@@ -1827,7 +1960,7 @@ mod tests {
         let configuration = database.get_configuration().unwrap();
         assert_eq!(configuration.sites.len(), 3);
         assert_eq!(crate::query::generate_queries(&configuration).len(), 12);
-        assert_eq!(database.diagnostics("test").unwrap().schema_version, 6);
+        assert_eq!(database.diagnostics("test").unwrap().schema_version, 7);
         drop(database);
         fs::remove_dir_all(directory).unwrap();
     }
@@ -1855,7 +1988,7 @@ mod tests {
         drop(connection);
 
         let database = Database::initialize(path).unwrap();
-        assert_eq!(database.diagnostics("test").unwrap().schema_version, 6);
+        assert_eq!(database.diagnostics("test").unwrap().schema_version, 7);
         let connection = database.connect().unwrap();
         assert!(
             connection
