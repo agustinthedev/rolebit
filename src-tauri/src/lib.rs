@@ -1,3 +1,4 @@
+mod ats;
 mod commands;
 mod db;
 mod extractor;

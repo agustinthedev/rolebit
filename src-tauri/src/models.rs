@@ -345,6 +345,7 @@ pub struct CandidateJob {
     pub canonical_url: String,
     pub external_id: Option<String>,
     pub source_domain: String,
+    pub ats_board: Option<crate::ats::AtsBoard>,
     pub title: String,
     pub company: Option<String>,
     pub description: Option<String>,
