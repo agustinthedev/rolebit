@@ -15,6 +15,7 @@ No localhost service or hosted database is involved.
 | `src-tauri/src/query.rs` | Site normalization and deterministic Cartesian query generation |
 | `src-tauri/src/provider.rs` | Bright Data adapter, retries, response parsing, and mock SERP results |
 | `src-tauri/src/extractor.rs` | Public-URL validation, guarded redirects, JSON-LD, HTML fallback, and normalization |
+| `src-tauri/src/decision.rs` | OpenAI Decisions API page classification and privacy-filtered profile scoring |
 | `src-tauri/src/ingestion.rs` | Concurrency, cancellation, deduplication within a run, progress, and completion status |
 | `src-tauri/src/secret.rs` | Windows Credential Manager access for the API key |
 | `src-tauri/src/lib.rs` | Application lifecycle, tray, scheduler, recovery, and command registration |
@@ -40,11 +41,15 @@ Migration 1 creates:
 
 SQLite starts with foreign keys enabled, WAL journal mode, normal synchronization, and a ten-second busy timeout. Ingestion writes use atomic transactions; canonical job upserts use an immediate transaction to serialize concurrent identity decisions.
 
+Migration 6 stores Decisions API classification confidence, overall profile fit, skill, experience, seniority, and location scores, plus matching errors. Migration 7 stores fingerprints for the page evidence and professional profile used to produce those decisions. Match scores are part of the job content hash, so a profile-driven score change is retained in the revision history.
+
 Timestamps are persisted as UTC RFC 3339 strings. Pagination and filters execute in SQLite. FTS5 searches title, company, and description without loading the full library into React.
 
 ## Ingestion state
 
-Only one run may own the process-wide running flag. A run creates query executions concurrently up to the user setting. Each result URL is deduplicated within that run before extraction, then committed independently so one failed query does not discard other successful work.
+Only one run may own the process-wide running flag. A run creates query executions concurrently up to the user setting. Each result URL is deduplicated within that run before extraction and page classification, then committed independently so one failed query does not discard other successful work.
+
+The Rust extractor gathers evidence for every fetched HTML page without making a local job-versus-generic decision. Decisions API classifies fetched pages as a specific posting, careers page, contact page, company page, or other, reusing saved decisions for known unchanged postings. Non-postings are recorded as filtered discoveries. Only a specific posting is sent for profile scoring; a scoring error is stored with the job, so it does not discard the posting. A changed profile reruns matching without repeating page classification.
 
 Final states are:
 
@@ -58,7 +63,7 @@ Cancellation is checked between queries, pages, and candidate extractions. Compl
 
 ## Identity and change detection
 
-The source key is `<source-domain>:<external-id>` when a reliable external ID exists; otherwise it is the canonical normalized URL. A SHA-256 hash covers normalized meaningful fields rather than raw HTML. Changes create a revision snapshot and update the canonical record without overwriting non-empty values with missing extraction results. Tracking status is never changed by ingestion.
+The source key is `<source-domain>:<external-id>` when a reliable external ID exists; otherwise it is the canonical normalized URL. A SHA-256 hash covers normalized posting fields and profile-match results rather than raw HTML. Separate SHA-256 fingerprints track the evidence sent to Decisions API and the allowlisted profile used for matching, avoiding repeat requests for unchanged inputs. Changes create a revision snapshot and update the canonical record without overwriting non-empty values with missing extraction results. Tracking status is never changed by ingestion.
 
 ## Scheduler
 
@@ -67,6 +72,8 @@ The scheduler checks once per minute while the process is running. It compares t
 ## Security decisions
 
 - API secrets use the operating-system credential store.
+- OpenAI Decisions API calls originate in Rust; the OpenAI key is never exposed to the webview.
+- Classification sees page evidence only. Profile scoring starts after a specific posting is identified and sends an allowlist of professional fields, excluding names, contact details, street address, profile URLs, project URLs, credential URLs, and local record IDs.
 - The CSP permits only packaged content, Tauri IPC, data images, and the local asset protocol.
 - Provider access occurs in Rust, keeping secrets out of the webview.
 - Candidate URLs and every redirect are restricted to public HTTP/HTTPS destinations.

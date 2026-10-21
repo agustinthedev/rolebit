@@ -1,6 +1,7 @@
 mod ats;
 mod commands;
 mod db;
+mod decision;
 mod extractor;
 mod ingestion;
 mod models;

@@ -1,23 +1,25 @@
 # Rolebit
 
-Rolebit is a local-first Windows desktop application for discovering, collecting, and reviewing job opportunities. You define sites, locations, and roles; Rolebit generates the full Cartesian product of Google queries, discovers candidate URLs through Bright Data SERP, verifies job pages, removes duplicates, and preserves the resulting library in local SQLite storage.
+Rolebit is a local-first Windows desktop application for discovering, collecting, and reviewing job opportunities. You define sites and locations; Rolebit generates the full Cartesian product of Google queries, discovers candidate URLs through Bright Data SERP, classifies pages with OpenAI Decisions API, matches specific postings against your professional profile, removes duplicates, and preserves the resulting library in local SQLite storage.
 
 ![Rolebit overview dashboard](docs/screenshots/overview.png)
 
 ## MVP capabilities
 
 - Six-step first-run onboarding with a persisted, non-secret local draft.
-- Editable Sites, Locations, and Roles lists with deterministic query previews.
+- Editable Sites and Locations lists with deterministic query previews.
 - Request-volume, monthly-usage, and user-configured cost estimates.
 - Bright Data SERP integration with localization, pagination, timeouts, retries, rate-limit handling, and cancellation.
 - A zero-cost mock provider for development and product evaluation.
-- JSON-LD `JobPosting` extraction followed by conservative HTML fallback extraction.
+- JSON-LD `JobPosting` extraction plus generic HTML page-evidence extraction.
+- Decisions API page classification for specific postings, careers pages, contact pages, company pages, and other results.
+- Profile fit scores for skills, experience, seniority, and location, shown on the dashboard and opportunity details.
 - Canonical URL normalization, source-ID identity, content hashes, transactional upserts, revisions, and multi-query discovery attribution.
 - SQLite FTS5 search, database-backed filters, deterministic sorting, and 25/50/100-row pagination.
 - Opportunity details, original-posting links, and independent New, Seen, Saved, and Dismissed tracking states.
 - Overview metrics, live ingestion progress, execution history, query-level errors, and real activity data.
 - Local scheduling, startup execution, overlap prevention, one-run catch-up behavior, cancellation, recovery, and system-tray controls.
-- Windows Credential Manager storage for the Bright Data API key.
+- Windows Credential Manager storage for Bright Data and OpenAI API keys.
 - NSIS installer configuration and tagged GitHub Release automation.
 
 ## Technology
@@ -39,7 +41,7 @@ Rust application core
   └─ repositories and migrations
        ▼
      SQLite + FTS5                 Windows Credential Manager
-     opportunities, history,      Bright Data API key only
+     opportunities, history,      Bright Data and OpenAI API keys
      configuration, attribution
 ```
 
@@ -82,29 +84,37 @@ The key is stored through Windows Credential Manager and is never written to SQL
 
 The initial integration calls `POST https://api.brightdata.com/request` with an encoded Google Search URL and `brd_json=1`. The adapter defensively accepts current structured-response shapes and records empty results separately from request failures.
 
+## Decisions API and profile matching
+
+Configure the OpenAI key in **Settings → Decisions API**. Bright Data ingestion requires this key: fetched pages are classified, and a page classified as one specific posting is sent in a second request for profile matching when professional profile details are available. Unchanged known postings reuse their saved decisions. The mock provider stays local and makes no OpenAI requests. Settings and manual connection tests warn that Decisions API requests may incur charges; saving settings does not start a run.
+
+Classification uses the page title, extracted company or board, source domain, and up to 20,000 characters of page text. Matching runs only after a page is classified as one specific opening. It sends job-relevant professional details such as skills, work history, education, projects, languages, location, and work eligibility. Names, preferred names, contact details, street address, profile links, project URLs, and credential URLs are excluded. Each opportunity stores an overall fit score, confidence, and skill, experience, seniority, and location scores.
+
+Saved opportunities are analyzed when first discovered. Later ingestions reuse the classification and match for unchanged postings; changed page evidence triggers reclassification and, if the page remains a posting, matching again. Changed professional profile data triggers matching only. The dashboard highlights strong matches at 75% or higher; opportunity details show the full score breakdown and any scoring error.
+
 ## Query generation and cost awareness
 
-For every enabled entry, Rolebit generates:
+For every enabled site and location, Rolebit generates:
 
 ```text
-site:<site> "<location>" "<role>"
+site:<site> "<location>"
 ```
 
-The order is deterministic. Schemes and path suffixes are removed from site inputs, quoted terms are escaped, equivalent generated queries are deduplicated, and intentionally empty location or role values remain supported. Rolebit does not rewrite or optimize a strategy automatically.
+The order is deterministic. Schemes and path suffixes are removed from site inputs, quoted terms are escaped, equivalent generated queries are deduplicated, and intentionally empty location values remain supported. Rolebit does not rewrite or optimize a strategy automatically.
 
-The preview shows exact queries, pages per query, planned request count, recurring monthly usage, and estimated cost using the user's own per-request estimate. An optional request budget blocks an execution before any provider call if the plan is too large.
+The preview shows exact queries, pages per query, planned search requests, recurring monthly search usage, and estimated Bright Data cost using the user's own per-request estimate. Decisions API requests are additional and are billed by OpenAI. An optional request budget blocks an execution before any provider call if the search plan is too large.
 
 ## Ingestion, extraction, and safety
 
 The pipeline is:
 
 ```text
-Configuration → Queries → SERP → Candidate URLs → Fetch → Extract → Normalize → Upsert → Dashboard
+Configuration → Queries → SERP → Candidate URLs → Fetch → Extract → Decisions API classification → Profile match → Upsert → Dashboard
 ```
 
 Candidate fetches allow HTTP/HTTPS only. Direct and DNS-resolved loopback, private, link-local, and local destinations are rejected. Redirects are followed manually and revalidated before each request. Rolebit does not bypass authentication, CAPTCHAs, or access controls and never executes downloaded scripts.
 
-Extraction prefers structured `JobPosting` JSON-LD, then uses a conservative generic HTML fallback. Failed or unresolved candidates remain associated with their query execution and are visible in ingestion history; missing fields are not invented.
+Extraction prefers structured `JobPosting` JSON-LD and otherwise gathers page evidence from HTML. The Decisions API classifies each page instead of local title, path, or content heuristics rejecting generic results before classification. Careers, contact, company, and other pages are recorded as filtered discoveries; only specific postings become opportunities. Failed or unresolved candidates remain associated with their query execution and are visible in ingestion history; missing fields are not invented.
 
 ## Deduplication and attribution
 
@@ -134,7 +144,7 @@ cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo test --manifest-path src-tauri/Cargo.toml --lib
 ```
 
-No automated test makes a paid Bright Data request. Rust tests cover Cartesian query generation, response parsing, JSON-LD and fallback rejection, migrations, FTS filtering, pagination behavior, revisions, tracking-state preservation, multi-query attribution, and concurrent deduplication. Frontend tests cover configuration editing, query previews, filters, status changes, and application-shell rendering.
+No automated test makes a paid Bright Data request. Rust tests cover Cartesian query generation, response parsing, JSON-LD and page-evidence extraction, migrations, FTS filtering, pagination behavior, revisions, tracking-state preservation, multi-query attribution, and concurrent deduplication. Frontend tests cover configuration editing, query previews, filters, status changes, and application-shell rendering.
 
 Rendered screenshot QA is available through `npm run visual:qa` while `npm run dev` is active. The checked-in captures cover onboarding, overview, opportunities, details, configuration, history, and settings at 1440×900.
 
@@ -155,8 +165,8 @@ The CI workflow checks frontend and Rust code and performs a Windows desktop bui
 ## Known limitations
 
 - The Bright Data path is covered by mocked responses but has not been live-tested with paid credentials in this repository.
-- Generic HTML extraction intentionally rejects ambiguous pages; additional board-specific adapters are future work.
+- Decisions API matching runs during ingestion; saved postings are refreshed when searches rediscover them.
 - Scheduling cannot run while Rolebit is quit or the computer is powered off.
 - Installers are unsigned until the repository owner configures a trusted code-signing identity.
 - The MVP prioritizes the refined light theme; a dark theme is not included.
-- Full application-stage tracking, AI matching, resumes, and automated applications are intentionally outside this MVP.
+- Application-stage tracking, resume generation, and automated applications are outside this MVP.

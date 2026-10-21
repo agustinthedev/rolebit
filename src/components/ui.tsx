@@ -31,6 +31,15 @@ export function StatusBadge({ value, children }: { value: string; children?: Rea
   return <span className={cn("status-badge", `status-badge--${value.replaceAll("_", "-")}`)}><span className="status-badge__dot" />{children ?? value.replaceAll("_", " ")}</span>;
 }
 
+export function MatchBadge({ score, error, compact = false }: { score?: number | null; error?: string | null; compact?: boolean }) {
+  if (typeof score !== "number") {
+    return <span className={cn("match-badge", error ? "match-badge--error" : "match-badge--pending")} title={error ?? undefined}>{error ? "Match needs retry" : "Not matched"}</span>;
+  }
+  const level = score >= 85 ? "excellent" : score >= 70 ? "strong" : score >= 50 ? "partial" : "low";
+  const label = score >= 85 ? "Excellent" : score >= 70 ? "Strong" : score >= 50 ? "Partial" : "Low";
+  return <span className={cn("match-badge", `match-badge--${level}`)} title={`${label} profile fit · ${score}%`}><strong>{Math.round(score)}%</strong>{compact ? ` ${label.toLowerCase()}` : ` ${label.toLowerCase()} fit`}</span>;
+}
+
 export function PageHeader({ eyebrow, title, description, actions }: { eyebrow?: string; title: string; description: string; actions?: ReactNode }) {
   return <header className="page-header"><div>{eyebrow && <TechLabel>{eyebrow}</TechLabel>}<h1>{title}</h1><p>{description}</p></div>{actions && <div className="page-header__actions">{actions}</div>}</header>;
 }
