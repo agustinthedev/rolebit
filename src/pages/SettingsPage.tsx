@@ -47,8 +47,10 @@ export function SettingsPage({ initial, initialConfiguration, onSaved, onConfigu
 
   return <div className="page">
     <PageHeader eyebrow="Application preferences" title="Settings" description="Credentials, search strategy, ingestion limits, scheduling, and local diagnostics in one place." actions={<Button variant="primary" icon={Save} disabled={busy} onClick={save}>{busy ? "Saving…" : "Save settings"}</Button>} />
-    {notice && <InlineNotice tone="success" title="All set">{notice}</InlineNotice>}
-    {error && <InlineNotice tone="error" title="Could not complete that action">{error}</InlineNotice>}
+    {(notice || error) && <div className="settings-feedback">
+      {notice && <InlineNotice tone="success" title="All set">{notice}</InlineNotice>}
+      {error && <InlineNotice tone="error" title="Could not complete that action">{error}</InlineNotice>}
+    </div>}
     <div className="settings-grid">
       <SearchConfigurationSection initial={initialConfiguration} settings={initial} onSaved={onConfigurationSaved} />
       <SettingsSection icon={KeyRound} label="Bright Data" title="Search provider">
