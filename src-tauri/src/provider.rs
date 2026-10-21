@@ -168,14 +168,20 @@ pub fn mock_results(query: &str, page: u32) -> Vec<SearchResult> {
         port: None,
         path: String::new(),
     });
+    let authority = site
+        .port
+        .map(|port| format!("{}:{port}", site.host))
+        .unwrap_or_else(|| site.host.clone());
     let path = if site.path.is_empty() {
         format!("/rolebit-demo/{}", &digest[..12])
-    } else {
+    } else if site.path.contains('*') {
         site.path
             .replace('*', &format!("rolebit-demo-{}", &digest[..6]))
+    } else {
+        format!("{}/rolebit-demo-{}", site.path, &digest[..12])
     };
     vec![SearchResult {
-        url: format!("https://{}{}", site.host, path),
+        url: format!("https://{authority}{path}"),
         title: Some(format!(
             "{} — sample opportunity",
             quoted_terms(query)
@@ -423,6 +429,19 @@ mod tests {
         let query = r#"site:jobs.example.com "Remote" "QA Engineer""#;
         assert_eq!(mock_results(query, 1).len(), 1);
         assert!(mock_results(query, 2).is_empty());
+    }
+
+    #[test]
+    fn keeps_fixed_mock_site_paths_distinct_per_query() {
+        let first = mock_results(r#"site:jobs.example.com/jobs "Remote""#, 1);
+        let second = mock_results(r#"site:jobs.example.com/jobs "Uruguay""#, 1);
+        assert_ne!(first[0].url, second[0].url);
+        assert!(first[0]
+            .url
+            .starts_with("https://jobs.example.com/jobs/rolebit-demo-"));
+        assert!(second[0]
+            .url
+            .starts_with("https://jobs.example.com/jobs/rolebit-demo-"));
     }
 
     #[test]
