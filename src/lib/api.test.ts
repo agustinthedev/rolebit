@@ -21,6 +21,22 @@ describe("browser preview data boundary", () => {
     expect(result.totalRequests).toBe(4);
   });
 
+  it("preserves configured site paths in the query preview", async () => {
+    const configuration: SearchConfiguration = {
+      sites: [
+        { value: "https://job-boards.greenhouse.io/*/jobs/*/", enabled: true },
+        { value: "https://apply.workable.com/*/j/*/", enabled: true },
+      ],
+      locations: [{ value: "Uruguay", enabled: true }],
+      pagesPerQuery: 1,
+    };
+    const result = await api.previewQueries({ configuration });
+    expect(result.queries).toEqual([
+      'site:job-boards.greenhouse.io/*/jobs/* "Uruguay"',
+      'site:apply.workable.com/*/j/* "Uruguay"',
+    ]);
+  });
+
   it("filters, sorts, paginates, and updates tracking state", async () => {
     const page = await api.listJobs({ search: "engineer", trackingStatus: "new", sort: "title", page: 1, pageSize: 25 });
     expect(page.total).toBeGreaterThan(0);

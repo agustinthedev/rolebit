@@ -1,18 +1,111 @@
 use std::collections::HashSet;
 
 use crate::models::{QueryPreview, SearchConfiguration, SearchItem};
+use url::Url;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SitePattern {
+    pub host: String,
+    pub path: String,
+}
+
+impl SitePattern {
+    pub fn parse(value: &str) -> Option<Self> {
+        let value = value.trim().trim_matches(['"', '\'']);
+        let value = value
+            .strip_prefix("https://")
+            .or_else(|| value.strip_prefix("http://"))
+            .unwrap_or(value);
+        let value = value.split(['?', '#']).next()?.trim_end_matches('/');
+        let (host, path) = value.split_once('/').unwrap_or((value, ""));
+        let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+        if host.is_empty() || Url::parse(&format!("https://{host}")).is_err() {
+            return None;
+        }
+        let path = path.trim_matches('/');
+        Some(Self {
+            host,
+            path: if path.is_empty() {
+                String::new()
+            } else {
+                format!("/{path}")
+            },
+        })
+    }
+
+    pub fn normalized(&self) -> String {
+        if self.path.is_empty() {
+            self.host.clone()
+        } else {
+            format!("{}{}", self.host, self.path)
+        }
+    }
+
+    pub fn matches_url(&self, value: &str) -> bool {
+        let Some(url) = Url::parse(value).ok() else {
+            return false;
+        };
+        let Some(host) = url.host_str().map(str::to_ascii_lowercase) else {
+            return false;
+        };
+        if host != self.host && !host.ends_with(&format!(".{}", self.host)) {
+            return false;
+        }
+        let path = url.path().trim_end_matches('/');
+        if self.path.is_empty() {
+            return true;
+        }
+        if self.path.contains('*') {
+            glob_matches(&self.path, path)
+        } else {
+            path == self.path || path.starts_with(&format!("{}/", self.path))
+        }
+    }
+}
+
+pub fn site_pattern_from_query(query: &str) -> Option<SitePattern> {
+    query.split_whitespace().find_map(|part| {
+        SitePattern::parse(part.strip_prefix("site:")?)
+    })
+}
 
 pub fn normalize_site(value: &str) -> String {
-    let trimmed = value.trim().trim_matches('/');
-    let without_scheme = trimmed
-        .strip_prefix("https://")
-        .or_else(|| trimmed.strip_prefix("http://"))
-        .unwrap_or(trimmed);
-    without_scheme
-        .split('/')
-        .next()
+    SitePattern::parse(value)
+        .map(|pattern| pattern.normalized())
         .unwrap_or_default()
-        .to_lowercase()
+}
+
+fn glob_matches(pattern: &str, value: &str) -> bool {
+    let pattern = pattern.as_bytes();
+    let value = value.as_bytes();
+    let mut pattern_index = 0;
+    let mut value_index = 0;
+    let mut star_index = None;
+    let mut star_value_index = 0;
+
+    while value_index < value.len() {
+        if pattern_index < pattern.len()
+            && pattern[pattern_index] != b'*'
+            && pattern[pattern_index] == value[value_index]
+        {
+            pattern_index += 1;
+            value_index += 1;
+        } else if pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+            star_index = Some(pattern_index);
+            pattern_index += 1;
+            star_value_index = value_index;
+        } else if let Some(star) = star_index {
+            pattern_index = star + 1;
+            star_value_index += 1;
+            value_index = star_value_index;
+        } else {
+            return false;
+        }
+    }
+    while pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+        pattern_index += 1;
+    }
+    pattern_index == pattern.len()
 }
 
 fn quote_term(value: &str) -> String {
@@ -121,5 +214,33 @@ mod tests {
             pages_per_query: 1,
         };
         assert_eq!(generate_queries(&config).len(), 1);
+    }
+
+    #[test]
+    fn preserves_site_paths_and_wildcards() {
+        let config = SearchConfiguration {
+            sites: vec![
+                item("https://job-boards.greenhouse.io/*/jobs/*/", true),
+                item("https://apply.workable.com/*/j/*/", true),
+            ],
+            locations: vec![item("Uruguay", true)],
+            pages_per_query: 1,
+        };
+        assert_eq!(
+            generate_queries(&config),
+            vec![
+                "site:job-boards.greenhouse.io/*/jobs/* \"Uruguay\"",
+                "site:apply.workable.com/*/j/* \"Uruguay\"",
+            ]
+        );
+    }
+
+    #[test]
+    fn matches_site_paths_and_subdomains() {
+        let pattern = SitePattern::parse("https://apply.workable.com/*/j/*/").unwrap();
+        assert!(pattern.matches_url("https://apply.workable.com/acme/j/123"));
+        assert!(pattern.matches_url("https://sub.apply.workable.com/acme/j/123/"));
+        assert!(!pattern.matches_url("https://apply.workable.com/acme/careers"));
+        assert!(!pattern.matches_url("https://other.example.com/acme/j/123"));
     }
 }
