@@ -188,6 +188,7 @@ pub struct Overview {
     pub total_opportunities: i64,
     pub new_opportunities: i64,
     pub recently_updated: i64,
+    pub strong_matches: i64,
     pub active_queries: i64,
     pub last_ingestion_at: Option<String>,
     pub next_ingestion_at: Option<String>,
@@ -221,6 +222,25 @@ pub struct JobSummary {
     pub last_seen_at: String,
     pub updated_at: String,
     pub content_updated: bool,
+    pub classification_confidence: Option<f64>,
+    pub match_score: Option<i64>,
+    pub match_confidence: Option<f64>,
+    pub skills_match: Option<i64>,
+    pub experience_match: Option<i64>,
+    pub seniority_match: Option<i64>,
+    pub location_match: Option<i64>,
+    pub match_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpportunityMatch {
+    pub overall: i64,
+    pub confidence: Option<f64>,
+    pub skills: Option<i64>,
+    pub experience: Option<i64>,
+    pub seniority: Option<i64>,
+    pub location: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

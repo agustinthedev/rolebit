@@ -14,7 +14,7 @@ use crate::{
     decision::{DecisionsClient, PageDecision},
     db::{Database, UpsertOutcome},
     extractor::{ExtractedPage, fetch_and_extract, mock_candidate},
-    models::{AppSettings, IngestionProgress},
+    models::{AppSettings, IngestionProgress, Profile},
     provider::{BrightDataProvider, SearchResponse, mock_results},
     query::{generate_queries, site_pattern_from_query},
     secret,
@@ -193,10 +193,10 @@ async fn execute(
     };
     let decisions_client = match &provider {
         Provider::Mock => None,
-        Provider::Bright(_) => match secret::get_decisions_api_key()
-            .and_then(|key| key.ok_or_else(|| "OpenAI Decisions API key is not configured".into()))
-            .and_then(|key| DecisionsClient::new(key, settings.request_timeout_seconds))
-        {
+        Provider::Bright(_) => match secret::get_decisions_api_key().and_then(|key| {
+            let key = key.ok_or_else(|| "OpenAI Decisions API key is not configured".to_string())?;
+            DecisionsClient::new(key, settings.request_timeout_seconds)
+        }) {
             Ok(client) => Some(client),
             Err(error) => {
                 let _ = state.db.finish_run(run_id, "failed", Some(&error));
@@ -219,6 +219,29 @@ async fn execute(
                 return;
             }
         },
+    };
+    let profile = match state.db.get_profile() {
+        Ok(profile) => profile,
+        Err(error) => {
+            let _ = state.db.finish_run(run_id, "failed", Some(&error));
+            state.running.store(false, Ordering::SeqCst);
+            let _ = app.emit(
+                "ingestion-progress",
+                IngestionProgress {
+                    run_id,
+                    status: "failed".into(),
+                    current_query: None,
+                    completed_queries: 0,
+                    total_queries: queries.len(),
+                    urls_discovered: 0,
+                    new_jobs: 0,
+                    updated_jobs: 0,
+                    errors: 1,
+                    filtered_results: 0,
+                },
+            );
+            return;
+        }
     };
     let counters = Arc::new(Counters {
         completed: AtomicUsize::new(0),
@@ -246,6 +269,7 @@ async fn execute(
             let extraction_cache = extraction_cache.clone();
             let decision_cache = decision_cache.clone();
             let decisions_client = decisions_client.clone();
+            let profile = profile.clone();
             async move {
                 if state.cancel.load(Ordering::SeqCst) {
                     return;
@@ -268,6 +292,7 @@ async fn execute(
                     &extraction_cache,
                     &decision_cache,
                     decisions_client.as_ref(),
+                    &profile,
                     &counters,
                 )
                 .await
@@ -337,6 +362,7 @@ async fn process_query(
     extraction_cache: &ExtractionCache,
     decision_cache: &DecisionCache,
     decisions_client: Option<&DecisionsClient>,
+    profile: &Profile,
     counters: &Arc<Counters>,
 ) -> Result<(), String> {
     let execution_id = state.db.start_query_execution(run_id, query)?;
@@ -434,12 +460,7 @@ async fn process_query(
                         counters.filtered.fetch_add(1, Ordering::SeqCst);
                         continue;
                     }
-                    match decide_page(
-                        decision_cache,
-                        decisions_client,
-                        &page,
-                    )
-                    .await
+                    match decide_page(decision_cache, decisions_client, &page, profile).await
                     {
                         Ok(decision) if decision.is_job_posting() => {
                             match state.db.record_candidate(
@@ -449,6 +470,9 @@ async fn process_query(
                                 result.title.as_deref(),
                                 result.snippet.as_deref(),
                                 candidate,
+                                decision.confidence,
+                                decision.matching.as_ref(),
+                                decision.matching_error.as_deref(),
                             )? {
                                 UpsertOutcome::New => {
                                     new_jobs += 1;
@@ -589,6 +613,7 @@ async fn decide_page(
     cache: &DecisionCache,
     client: Option<&DecisionsClient>,
     page: &ExtractedPage,
+    profile: &Profile,
 ) -> Result<PageDecision, String> {
     let Some(client) = client else {
         return Ok(PageDecision::local_job_posting());
@@ -604,7 +629,21 @@ async fn decide_page(
             .clone()
     };
     let decision = cell
-        .get_or_init(|| async { client.classify_page(&page.candidate, &page.page_text).await })
+        .get_or_init(|| async {
+            let mut decision = client
+                .classify_page(&page.candidate, &page.page_text)
+                .await?;
+            if decision.is_job_posting() {
+                match client
+                    .score_job(&page.candidate, &page.page_text, profile)
+                    .await
+                {
+                    Ok(matching) => decision.matching = matching,
+                    Err(error) => decision.matching_error = Some(error),
+                }
+            }
+            Ok(decision)
+        })
         .await
         .clone();
     if decision.is_err() {
