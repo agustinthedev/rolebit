@@ -11,6 +11,7 @@ import type {
   JobDetail,
   JobListRequest,
   JobPage,
+  Profile,
   QueryPreview,
   QueryPreviewInput,
   SaveSettingsInput,
@@ -54,6 +55,16 @@ let demoSettings: AppSettings = {
   hasApiKey: false,
   databasePath: "C:\\Users\\You\\AppData\\Roaming\\com.rolebit.desktop\\rolebit.sqlite3",
   appVersion: "0.1.0",
+};
+
+let demoProfile: Profile = {
+  fullName: "",
+  experiences: [],
+  education: [],
+  projects: [],
+  skills: [],
+  languages: [],
+  certifications: [],
 };
 
 const demoJobs: JobDetail[] = [
@@ -155,6 +166,8 @@ async function demoInvoke<T>(command: string, args: Record<string, unknown> = {}
     case "get_overview": return overview() as T;
     case "get_search_configuration": return demoConfig as T;
     case "save_search_configuration": demoConfig = args.configuration as SearchConfiguration; return demoConfig as T;
+    case "get_profile": return demoProfile as T;
+    case "save_profile": demoProfile = args.profile as Profile; return demoProfile as T;
     case "preview_queries": return preview(args.input as QueryPreviewInput) as T;
     case "get_settings": return demoSettings as T;
     case "save_settings": {
@@ -239,6 +252,8 @@ export const api = {
   overview: () => call<Bootstrap["overview"]>("get_overview"),
   configuration: () => call<SearchConfiguration>("get_search_configuration"),
   saveConfiguration: (configuration: SearchConfiguration) => call<SearchConfiguration>("save_search_configuration", { configuration }),
+  profile: () => call<Profile>("get_profile"),
+  saveProfile: (profile: Profile) => call<Profile>("save_profile", { profile }),
   previewQueries: (input: QueryPreviewInput) => call<QueryPreview>("preview_queries", { input }),
   settings: () => call<AppSettings>("get_settings"),
   saveSettings: (settings: SaveSettingsInput) => call<AppSettings>("save_settings", { settings }),
