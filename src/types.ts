@@ -1,4 +1,4 @@
-export type PageId = "overview" | "opportunities" | "configuration" | "history" | "profile" | "settings";
+export type PageId = "overview" | "opportunities" | "history" | "profile" | "settings";
 
 export interface SearchItem {
   id?: number;

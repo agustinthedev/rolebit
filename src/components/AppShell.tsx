@@ -1,4 +1,4 @@
-import { Clock3, LayoutDashboard, ListFilter, Search, Settings2, Sparkles, UserRound } from "lucide-react";
+import { Clock3, LayoutDashboard, ListFilter, Settings2, Sparkles, UserRound } from "lucide-react";
 import type { ReactNode } from "react";
 import type { PageId } from "../types";
 import { isDesktop } from "../lib/api";
@@ -8,7 +8,6 @@ import { cn } from "./ui";
 const items = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
   { id: "opportunities", label: "All Opportunities", icon: ListFilter },
-  { id: "configuration", label: "Search Configuration", icon: Search },
   { id: "history", label: "Ingestion History", icon: Clock3 },
   { id: "profile", label: "Profile", icon: UserRound },
   { id: "settings", label: "Settings", icon: Settings2 },

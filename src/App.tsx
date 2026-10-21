@@ -6,7 +6,6 @@ import { BrandMark } from "./components/BrandMark";
 import { IconButton } from "./components/ui";
 import { api } from "./lib/api";
 import type { Bootstrap, IngestionProgress, PageId } from "./types";
-import { ConfigurationPage } from "./pages/ConfigurationPage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { Onboarding } from "./pages/Onboarding";
 import { OpportunitiesPage } from "./pages/OpportunitiesPage";
@@ -56,7 +55,7 @@ function App() {
   if (!bootstrap) return <div className="app-loading app-loading--error"><AlertTriangle size={28} /><h1>Rolebit could not open</h1><p>{error ?? "The local application state is unavailable."}</p><button onClick={refresh}>Try again</button></div>;
   if (!bootstrap.settings.onboardingComplete) return <Onboarding initialSettings={bootstrap.settings} initialConfiguration={bootstrap.configuration} onComplete={setBootstrap} />;
 
-  return <AppShell page={page} onPageChange={setPage}>{error && <div className="global-toast"><AlertTriangle size={17} /><span>{error}</span><IconButton aria-label="Dismiss error" onClick={() => setError(undefined)}><X size={16} /></IconButton></div>}{page === "overview" && <OverviewPage overview={bootstrap.overview} progress={progress} onStart={startIngestion} onCancel={cancel} onNavigate={setPage} onSelectJob={showJob} busy={starting} />}{page === "opportunities" && <OpportunitiesPage refreshKey={refreshKey} initialJobId={selectedJobId} onClearInitial={() => setSelectedJobId(undefined)} />}{page === "configuration" && <ConfigurationPage initial={bootstrap.configuration} settings={bootstrap.settings} onSaved={(configuration) => setBootstrap((current) => current && { ...current, configuration })} onRun={startIngestion} />}{page === "history" && <HistoryPage refreshKey={refreshKey} />}{page === "profile" && <ProfilePage />}{page === "settings" && <SettingsPage initial={bootstrap.settings} onSaved={(settings) => setBootstrap((current) => current && { ...current, settings })} />}</AppShell>;
+  return <AppShell page={page} onPageChange={setPage}>{error && <div className="global-toast"><AlertTriangle size={17} /><span>{error}</span><IconButton aria-label="Dismiss error" onClick={() => setError(undefined)}><X size={16} /></IconButton></div>}{page === "overview" && <OverviewPage overview={bootstrap.overview} progress={progress} onStart={startIngestion} onCancel={cancel} onNavigate={setPage} onSelectJob={showJob} busy={starting} />}{page === "opportunities" && <OpportunitiesPage refreshKey={refreshKey} initialJobId={selectedJobId} onClearInitial={() => setSelectedJobId(undefined)} />}{page === "history" && <HistoryPage refreshKey={refreshKey} />}{page === "profile" && <ProfilePage />}{page === "settings" && <SettingsPage initial={bootstrap.settings} initialConfiguration={bootstrap.configuration} onSaved={(settings) => setBootstrap((current) => current && { ...current, settings })} onConfigurationSaved={(configuration) => setBootstrap((current) => current && { ...current, configuration })} onRun={startIngestion} />}</AppShell>;
 }
 
 export default App;

@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { ConfigurationPage } from "./ConfigurationPage";
+import { SearchConfigurationSection } from "./SearchConfigurationSection";
 import type { AppSettings, SearchConfiguration } from "../types";
 
 const configuration: SearchConfiguration = {
@@ -32,15 +32,14 @@ const settings: AppSettings = {
   appVersion: "0.1.0",
 };
 
-describe("ConfigurationPage", () => {
+describe("SearchConfigurationSection", () => {
   it("blocks ingestion until edited search strategy changes are saved", async () => {
     const user = userEvent.setup();
     const onRun = vi.fn();
-    render(<ConfigurationPage initial={configuration} settings={settings} onSaved={vi.fn()} onRun={onRun} />);
+    render(<SearchConfigurationSection initial={configuration} settings={settings} onSaved={vi.fn()} onRun={onRun} />);
 
     const runButton = screen.getByRole("button", { name: "Run ingestion" });
     await waitFor(() => expect(runButton).toBeEnabled());
-
     await user.clear(screen.getByLabelText("Locations item 1"));
     await user.type(screen.getByLabelText("Locations item 1"), "LATAM");
     expect(runButton).toBeDisabled();
