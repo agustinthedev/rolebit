@@ -1789,7 +1789,7 @@ mod tests {
         drop(connection);
 
         let database = Database::initialize(path).unwrap();
-        assert_eq!(database.diagnostics("test").unwrap().schema_version, 4);
+        assert_eq!(database.diagnostics("test").unwrap().schema_version, 5);
         let connection = database.connect().unwrap();
         assert!(
             connection
@@ -1799,6 +1799,11 @@ mod tests {
         assert!(
             connection
                 .prepare("SELECT filtered_count FROM query_executions")
+                .is_ok()
+        );
+        assert!(
+            connection
+                .prepare("SELECT ats_type, board_name FROM employer_boards")
                 .is_ok()
         );
         drop(connection);
