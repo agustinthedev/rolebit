@@ -640,6 +640,7 @@ impl Database {
         &self,
         app_version: &str,
         has_api_key: bool,
+        has_decisions_api_key: bool,
     ) -> Result<AppSettings, String> {
         let connection = self.connect()?;
         Ok(AppSettings {
@@ -667,6 +668,7 @@ impl Database {
             close_to_tray: setting_bool(&connection, "close_to_tray", true)?,
             last_scheduled_run_at: setting_optional(&connection, "last_scheduled_run_at")?,
             has_api_key,
+            has_decisions_api_key,
             database_path: self.path.to_string_lossy().to_string(),
             app_version: app_version.to_string(),
         })

@@ -58,6 +58,7 @@ pub struct AppSettings {
     pub close_to_tray: bool,
     pub last_scheduled_run_at: Option<String>,
     pub has_api_key: bool,
+    pub has_decisions_api_key: bool,
     pub database_path: String,
     pub app_version: String,
 }
@@ -67,6 +68,7 @@ pub struct AppSettings {
 pub struct SaveSettingsInput {
     pub provider: String,
     pub api_key: Option<String>,
+    pub decisions_api_key: Option<String>,
     pub serp_zone: String,
     pub google_gl: String,
     pub google_hl: String,

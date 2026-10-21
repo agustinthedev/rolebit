@@ -1,5 +1,7 @@
 use tauri::{AppHandle, State};
 use tauri_plugin_autostart::ManagerExt;
+use serde_json::json;
+use std::time::Duration;
 
 use crate::{
     ingestion::{AppState, try_start_ingestion},
@@ -109,6 +111,47 @@ pub async fn test_bright_data_connection(
 }
 
 #[tauri::command]
+pub async fn test_decisions_connection(
+    api_key: Option<String>,
+) -> Result<String, String> {
+    let key = api_key
+        .filter(|value| !value.trim().is_empty())
+        .or(secret::get_decisions_api_key()?)
+        .ok_or_else(|| "Enter an OpenAI Decisions API key first".to_string())?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent("Rolebit/0.1")
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .post("https://api.openai.com/v1/decisions")
+        .bearer_auth(key.trim())
+        .json(&json!({
+            "model": "gpt-6-luna",
+            "input": "Connection test.",
+            "questions": [{
+                "type": "predicate",
+                "name": "connection",
+                "instructions": "Is this connection test input available?"
+            }]
+        }))
+        .send()
+        .await
+        .map_err(|error| format!("Decisions API request failed: {error}"))?;
+    let status = response.status();
+    let body = response.text().await.map_err(|error| error.to_string())?;
+    if !status.is_success() {
+        return Err(format!("Decisions API returned {status}: {}", response_preview(&body)));
+    }
+    let value: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|error| format!("Decisions API returned invalid JSON: {error}"))?;
+    if value.get("answers").and_then(serde_json::Value::as_array).is_none() {
+        return Err("Decisions API returned a response without answers".into());
+    }
+    Ok("Connection succeeded. Decisions API accepted a test decision.".into())
+}
+
+#[tauri::command]
 pub fn start_ingestion(app: AppHandle, state: State<'_, AppState>) -> Result<i64, String> {
     try_start_ingestion(app, state.inner().clone(), "manual")
 }
@@ -171,7 +214,11 @@ pub fn get_diagnostics(state: State<'_, AppState>) -> Result<Diagnostics, String
 fn get_settings_inner(state: &AppState) -> Result<crate::models::AppSettings, String> {
     state
         .db
-        .get_settings(env!("CARGO_PKG_VERSION"), secret::get_api_key()?.is_some())
+        .get_settings(
+            env!("CARGO_PKG_VERSION"),
+            secret::get_api_key()?.is_some(),
+            secret::get_decisions_api_key()?.is_some(),
+        )
 }
 
 fn save_settings_inner(
@@ -186,6 +233,13 @@ fn save_settings_inner(
             secret::set_api_key(api_key.trim())?;
         }
     }
+    if let Some(api_key) = settings.decisions_api_key.as_ref() {
+        if api_key.trim().is_empty() {
+            secret::delete_decisions_api_key()?;
+        } else {
+            secret::set_decisions_api_key(api_key.trim())?;
+        }
+    }
     state.db.save_settings(settings)?;
     if settings.start_with_windows {
         app.autolaunch()
@@ -197,4 +251,13 @@ fn save_settings_inner(
             .map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+fn response_preview(body: &str) -> String {
+    let compact = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() > 240 {
+        format!("{}…", compact.chars().take(240).collect::<String>())
+    } else {
+        compact
+    }
 }

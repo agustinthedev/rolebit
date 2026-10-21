@@ -28,6 +28,7 @@ const settings: AppSettings = {
   startWithWindows: false,
   closeToTray: true,
   hasApiKey: false,
+  hasDecisionsApiKey: false,
   databasePath: "rolebit.sqlite3",
   appVersion: "0.1.0",
 };

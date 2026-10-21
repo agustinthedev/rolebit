@@ -53,6 +53,7 @@ let demoSettings: AppSettings = {
   closeToTray: true,
   lastScheduledRunAt: hoursAgo(7),
   hasApiKey: false,
+  hasDecisionsApiKey: false,
   databasePath: "C:\\Users\\You\\AppData\\Roaming\\com.rolebit.desktop\\rolebit.sqlite3",
   appVersion: "0.1.0",
 };
@@ -169,13 +170,13 @@ async function demoInvoke<T>(command: string, args: Record<string, unknown> = {}
     case "get_settings": return demoSettings as T;
     case "save_settings": {
       const input = args.settings as SaveSettingsInput;
-      demoSettings = { ...demoSettings, ...input, hasApiKey: Boolean(input.apiKey || demoSettings.hasApiKey) };
+      demoSettings = { ...demoSettings, ...input, hasApiKey: Boolean(input.apiKey || demoSettings.hasApiKey), hasDecisionsApiKey: Boolean(input.decisionsApiKey || demoSettings.hasDecisionsApiKey) };
       return demoSettings as T;
     }
     case "complete_onboarding": {
       const input = args.input as { settings: SaveSettingsInput; configuration: SearchConfiguration };
       demoConfig = input.configuration;
-      demoSettings = { ...demoSettings, ...input.settings, onboardingComplete: true, hasApiKey: Boolean(input.settings.apiKey) };
+      demoSettings = { ...demoSettings, ...input.settings, onboardingComplete: true, hasApiKey: Boolean(input.settings.apiKey), hasDecisionsApiKey: Boolean(input.settings.decisionsApiKey) };
       return { settings: demoSettings, configuration: demoConfig, overview: overview(), recentRuns: demoRuns } as T;
     }
     case "list_jobs": return listDemoJobs(args.request as JobListRequest) as T;
@@ -192,6 +193,7 @@ async function demoInvoke<T>(command: string, args: Record<string, unknown> = {}
     }
     case "get_diagnostics": return { databasePath: demoSettings.databasePath, databaseSizeBytes: 482_304, sqliteVersion: "3.50.4", appVersion: demoSettings.appVersion, schemaVersion: 1 } as T;
     case "test_bright_data_connection": return "Browser preview cannot make paid requests. Run the desktop app to test this connection." as T;
+    case "test_decisions_connection": return "Browser preview cannot make API requests. Run the desktop app to test this connection." as T;
     case "start_ingestion": return simulateRun() as T;
     case "cancel_ingestion": return undefined as T;
     default: throw new Error(`Browser preview does not implement ${command}`);
@@ -259,6 +261,7 @@ export const api = {
   saveSettings: (settings: SaveSettingsInput) => call<AppSettings>("save_settings", { settings }),
   completeOnboarding: (input: { settings: SaveSettingsInput; configuration: SearchConfiguration }) => call<Bootstrap>("complete_onboarding", { input }),
   testConnection: (apiKey: string | undefined, zone: string) => call<string>("test_bright_data_connection", { apiKey, zone }),
+  testDecisionsConnection: (apiKey?: string) => call<string>("test_decisions_connection", { apiKey }),
   listJobs: (request: JobListRequest) => call<JobPage>("list_jobs", { request }),
   job: (id: number) => call<JobDetail>("get_job", { id }),
   updateJobStatus: (id: number, status: JobDetail["trackingStatus"]) => call<JobDetail>("update_tracking_status", { id, status }),

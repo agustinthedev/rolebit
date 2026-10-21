@@ -49,7 +49,7 @@ pub fn run() {
                 let close_to_tray = window
                     .state::<AppState>()
                     .db
-                    .get_settings(env!("CARGO_PKG_VERSION"), false)
+                    .get_settings(env!("CARGO_PKG_VERSION"), false, false)
                     .map(|settings| settings.close_to_tray)
                     .unwrap_or(true);
                 if close_to_tray {
@@ -69,6 +69,7 @@ pub fn run() {
             commands::save_settings,
             commands::complete_onboarding,
             commands::test_bright_data_connection,
+            commands::test_decisions_connection,
             commands::start_ingestion,
             commands::cancel_ingestion,
             commands::get_overview,
@@ -113,7 +114,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
             }
             "schedule" => {
                 let state = app.state::<AppState>();
-                if let Ok(settings) = state.db.get_settings(env!("CARGO_PKG_VERSION"), false) {
+                if let Ok(settings) = state.db.get_settings(env!("CARGO_PKG_VERSION"), false, false) {
                     let _ = state.db.set_schedule_enabled(!settings.schedule_enabled);
                 }
             }
@@ -135,7 +136,7 @@ fn start_scheduler(app: tauri::AppHandle, state: AppState) {
             })
             .await;
             let has_key = secret::get_api_key().ok().flatten().is_some();
-            if let Ok(settings) = state.db.get_settings(env!("CARGO_PKG_VERSION"), has_key) {
+            if let Ok(settings) = state.db.get_settings(env!("CARGO_PKG_VERSION"), has_key, false) {
                 let should_run_startup = first_check && settings.run_on_startup;
                 let should_run_scheduled = state.db.schedule_due().unwrap_or(false);
                 if (should_run_startup || should_run_scheduled) && !state.is_running() {
