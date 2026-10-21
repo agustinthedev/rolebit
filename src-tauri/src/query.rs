@@ -107,10 +107,7 @@ mod tests {
             locations: vec![item("", true)],
             pages_per_query: 1,
         };
-        assert_eq!(
-            generate_queries(&config),
-            vec!["site:jobs.example.com"]
-        );
+        assert_eq!(generate_queries(&config), vec!["site:jobs.example.com"]);
     }
 
     #[test]

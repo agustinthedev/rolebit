@@ -114,7 +114,10 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
             }
             "schedule" => {
                 let state = app.state::<AppState>();
-                if let Ok(settings) = state.db.get_settings(env!("CARGO_PKG_VERSION"), false, false) {
+                if let Ok(settings) = state
+                    .db
+                    .get_settings(env!("CARGO_PKG_VERSION"), false, false)
+                {
                     let _ = state.db.set_schedule_enabled(!settings.schedule_enabled);
                 }
             }
@@ -136,7 +139,10 @@ fn start_scheduler(app: tauri::AppHandle, state: AppState) {
             })
             .await;
             let has_key = secret::get_api_key().ok().flatten().is_some();
-            if let Ok(settings) = state.db.get_settings(env!("CARGO_PKG_VERSION"), has_key, false) {
+            if let Ok(settings) = state
+                .db
+                .get_settings(env!("CARGO_PKG_VERSION"), has_key, false)
+            {
                 let should_run_startup = first_check && settings.run_on_startup;
                 let should_run_scheduled = state.db.schedule_due().unwrap_or(false);
                 if (should_run_startup || should_run_scheduled) && !state.is_running() {

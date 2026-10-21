@@ -1,7 +1,8 @@
-use tauri::{AppHandle, State};
-use tauri_plugin_autostart::ManagerExt;
 use serde_json::json;
 use std::time::Duration;
+
+use tauri::{AppHandle, State};
+use tauri_plugin_autostart::ManagerExt;
 
 use crate::{
     ingestion::{AppState, try_start_ingestion},
@@ -111,9 +112,7 @@ pub async fn test_bright_data_connection(
 }
 
 #[tauri::command]
-pub async fn test_decisions_connection(
-    api_key: Option<String>,
-) -> Result<String, String> {
+pub async fn test_decisions_connection(api_key: Option<String>) -> Result<String, String> {
     let key = api_key
         .filter(|value| !value.trim().is_empty())
         .or(secret::get_decisions_api_key()?)
@@ -141,11 +140,18 @@ pub async fn test_decisions_connection(
     let status = response.status();
     let body = response.text().await.map_err(|error| error.to_string())?;
     if !status.is_success() {
-        return Err(format!("Decisions API returned {status}: {}", response_preview(&body)));
+        return Err(format!(
+            "Decisions API returned {status}: {}",
+            response_preview(&body)
+        ));
     }
     let value: serde_json::Value = serde_json::from_str(&body)
         .map_err(|error| format!("Decisions API returned invalid JSON: {error}"))?;
-    if value.get("answers").and_then(serde_json::Value::as_array).is_none() {
+    if value
+        .get("answers")
+        .and_then(serde_json::Value::as_array)
+        .is_none()
+    {
         return Err("Decisions API returned a response without answers".into());
     }
     Ok("Connection succeeded. Decisions API accepted a test decision.".into())
@@ -212,13 +218,11 @@ pub fn get_diagnostics(state: State<'_, AppState>) -> Result<Diagnostics, String
 }
 
 fn get_settings_inner(state: &AppState) -> Result<crate::models::AppSettings, String> {
-    state
-        .db
-        .get_settings(
-            env!("CARGO_PKG_VERSION"),
-            secret::get_api_key()?.is_some(),
-            secret::get_decisions_api_key()?.is_some(),
-        )
+    state.db.get_settings(
+        env!("CARGO_PKG_VERSION"),
+        secret::get_api_key()?.is_some(),
+        secret::get_decisions_api_key()?.is_some(),
+    )
 }
 
 fn save_settings_inner(

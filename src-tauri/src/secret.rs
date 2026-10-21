@@ -47,7 +47,9 @@ pub fn get_decisions_api_key() -> Result<Option<String>, String> {
         Ok(value) if !value.is_empty() => Ok(Some(value)),
         Ok(_) => Ok(None),
         Err(keyring::Error::NoEntry) => Ok(None),
-        Err(error) => Err(format!("Could not read the Decisions API key securely: {error}")),
+        Err(error) => Err(format!(
+            "Could not read the Decisions API key securely: {error}"
+        )),
     }
 }
 
