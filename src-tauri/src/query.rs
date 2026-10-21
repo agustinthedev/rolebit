@@ -6,6 +6,7 @@ use url::Url;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SitePattern {
     pub host: String,
+    pub port: Option<u16>,
     pub path: String,
 }
 
@@ -17,27 +18,27 @@ impl SitePattern {
             .or_else(|| value.strip_prefix("http://"))
             .unwrap_or(value);
         let value = value.split(['?', '#']).next()?.trim_end_matches('/');
-        let (host, path) = value.split_once('/').unwrap_or((value, ""));
-        let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
-        if host.is_empty() || Url::parse(&format!("https://{host}")).is_err() {
+        let parsed = Url::parse(&format!("https://{value}")).ok()?;
+        let host = parsed.host_str()?.trim_end_matches('.').to_ascii_lowercase();
+        if host.is_empty() {
             return None;
         }
-        let path = path.trim_matches('/');
         Some(Self {
             host,
-            path: if path.is_empty() {
-                String::new()
-            } else {
-                format!("/{path}")
-            },
+            port: parsed.port(),
+            path: parsed.path().trim_end_matches('/').to_string(),
         })
     }
 
     pub fn normalized(&self) -> String {
+        let authority = self
+            .port
+            .map(|port| format!("{}:{port}", self.host))
+            .unwrap_or_else(|| self.host.clone());
         if self.path.is_empty() {
-            self.host.clone()
+            authority
         } else {
-            format!("{}{}", self.host, self.path)
+            format!("{authority}{}", self.path)
         }
     }
 
@@ -49,6 +50,9 @@ impl SitePattern {
             return false;
         };
         if host != self.host && !host.ends_with(&format!(".{}", self.host)) {
+            return false;
+        }
+        if self.port.is_some() && url.port() != self.port {
             return false;
         }
         let path = url.path().trim_end_matches('/');
@@ -242,5 +246,20 @@ mod tests {
         assert!(pattern.matches_url("https://sub.apply.workable.com/acme/j/123/"));
         assert!(!pattern.matches_url("https://apply.workable.com/acme/careers"));
         assert!(!pattern.matches_url("https://other.example.com/acme/j/123"));
+    }
+
+    #[test]
+    fn normalizes_site_ports_and_encoded_paths() {
+        let pattern = SitePattern::parse("https://JOBS.example.com:443/carrières/*").unwrap();
+        assert_eq!(
+            pattern.normalized(),
+            "jobs.example.com:443/carri%C3%A8res/*"
+        );
+        assert!(pattern.matches_url(
+            "https://jobs.example.com:443/carri%C3%A8res/123"
+        ));
+        assert!(!pattern.matches_url(
+            "https://jobs.example.com:8443/carri%C3%A8res/123"
+        ));
     }
 }

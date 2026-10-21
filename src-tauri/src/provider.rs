@@ -165,6 +165,7 @@ pub fn mock_results(query: &str, page: u32) -> Vec<SearchResult> {
     let digest = hex::encode(Sha256::digest(query.as_bytes()));
     let site = site_pattern_from_query(query).unwrap_or_else(|| SitePattern {
         host: "jobs.example.com".into(),
+        port: None,
         path: String::new(),
     });
     let path = if site.path.is_empty() {
