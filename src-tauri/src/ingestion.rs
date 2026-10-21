@@ -11,8 +11,9 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::OnceCell;
 
 use crate::{
+    decision::{DecisionsClient, PageDecision},
     db::{Database, UpsertOutcome},
-    extractor::{fetch_and_extract, is_non_job_result, mock_candidate},
+    extractor::{ExtractedPage, fetch_and_extract, mock_candidate},
     models::{AppSettings, IngestionProgress},
     provider::{BrightDataProvider, SearchResponse, mock_results},
     query::{generate_queries, site_pattern_from_query},
@@ -93,7 +94,9 @@ struct Counters {
 }
 
 type ExtractionCache =
-    Arc<Mutex<HashMap<String, Arc<OnceCell<Result<crate::models::CandidateJob, String>>>>>>;
+    Arc<Mutex<HashMap<String, Arc<OnceCell<Result<ExtractedPage, String>>>>>>;
+type DecisionCache =
+    Arc<Mutex<HashMap<String, Arc<OnceCell<Result<PageDecision, String>>>>>>;
 
 pub fn try_start_ingestion(app: AppHandle, state: AppState, trigger: &str) -> Result<i64, String> {
     state.try_acquire_run()?;
@@ -111,6 +114,10 @@ pub fn try_start_ingestion(app: AppHandle, state: AppState, trigger: &str) -> Re
             return Err(error);
         }
     };
+    if settings.provider == "bright_data" && !settings.has_decisions_api_key {
+        state.release_run();
+        return Err("OpenAI Decisions API key is not configured".into());
+    }
     let queries = generate_queries(&configuration);
     if queries.is_empty() {
         state.release_run();
@@ -184,6 +191,35 @@ async fn execute(
             return;
         }
     };
+    let decisions_client = match &provider {
+        Provider::Mock => None,
+        Provider::Bright(_) => match secret::get_decisions_api_key()
+            .and_then(|key| key.ok_or_else(|| "OpenAI Decisions API key is not configured".into()))
+            .and_then(|key| DecisionsClient::new(key, settings.request_timeout_seconds))
+        {
+            Ok(client) => Some(client),
+            Err(error) => {
+                let _ = state.db.finish_run(run_id, "failed", Some(&error));
+                state.running.store(false, Ordering::SeqCst);
+                let _ = app.emit(
+                    "ingestion-progress",
+                    IngestionProgress {
+                        run_id,
+                        status: "failed".into(),
+                        current_query: None,
+                        completed_queries: 0,
+                        total_queries: queries.len(),
+                        urls_discovered: 0,
+                        new_jobs: 0,
+                        updated_jobs: 0,
+                        errors: 1,
+                        filtered_results: 0,
+                    },
+                );
+                return;
+            }
+        },
+    };
     let counters = Arc::new(Counters {
         completed: AtomicUsize::new(0),
         urls: AtomicUsize::new(0),
@@ -196,6 +232,7 @@ async fn execute(
         successes: AtomicUsize::new(0),
     });
     let extraction_cache: ExtractionCache = Arc::new(Mutex::new(HashMap::new()));
+    let decision_cache: DecisionCache = Arc::new(Mutex::new(HashMap::new()));
     let total = queries.len();
     emit_progress(&app, run_id, "running", None, total, &counters);
 
@@ -207,6 +244,8 @@ async fn execute(
             let provider = provider.clone();
             let counters = counters.clone();
             let extraction_cache = extraction_cache.clone();
+            let decision_cache = decision_cache.clone();
+            let decisions_client = decisions_client.clone();
             async move {
                 if state.cancel.load(Ordering::SeqCst) {
                     return;
@@ -227,6 +266,8 @@ async fn execute(
                     &query,
                     pages,
                     &extraction_cache,
+                    &decision_cache,
+                    decisions_client.as_ref(),
                     &counters,
                 )
                 .await
@@ -294,6 +335,8 @@ async fn process_query(
     query: &str,
     pages: u32,
     extraction_cache: &ExtractionCache,
+    decision_cache: &DecisionCache,
+    decisions_client: Option<&DecisionsClient>,
     counters: &Arc<Counters>,
 ) -> Result<(), String> {
     let execution_id = state.db.start_query_execution(run_id, query)?;
@@ -363,10 +406,13 @@ async fn process_query(
                 query,
                 &result.url,
                 settings.request_timeout_seconds,
+                result.title.as_deref(),
+                result.snippet.as_deref(),
             )
             .await;
             match extracted {
-                Ok(candidate) => {
+                Ok(page) => {
+                    let candidate = &page.candidate;
                     if let Some(expected_site) = expected_site.as_ref()
                         && !expected_site.matches_url(&candidate.canonical_url)
                     {
@@ -388,37 +434,69 @@ async fn process_query(
                         counters.filtered.fetch_add(1, Ordering::SeqCst);
                         continue;
                     }
-                    match state.db.record_candidate(
-                        run_id,
-                        execution_id,
-                        provider.name(),
-                        result.title.as_deref(),
-                        result.snippet.as_deref(),
-                        &candidate,
-                    )? {
-                        UpsertOutcome::New => {
-                            new_jobs += 1;
-                            counters.new_jobs.fetch_add(1, Ordering::SeqCst);
+                    match decide_page(
+                        decision_cache,
+                        decisions_client,
+                        &page,
+                    )
+                    .await
+                    {
+                        Ok(decision) if decision.is_job_posting() => {
+                            match state.db.record_candidate(
+                                run_id,
+                                execution_id,
+                                provider.name(),
+                                result.title.as_deref(),
+                                result.snippet.as_deref(),
+                                candidate,
+                            )? {
+                                UpsertOutcome::New => {
+                                    new_jobs += 1;
+                                    counters.new_jobs.fetch_add(1, Ordering::SeqCst);
+                                }
+                                UpsertOutcome::Updated => {
+                                    updated_jobs += 1;
+                                    counters.updated_jobs.fetch_add(1, Ordering::SeqCst);
+                                }
+                                UpsertOutcome::Existing => {}
+                            }
                         }
-                        UpsertOutcome::Updated => {
-                            updated_jobs += 1;
-                            counters.updated_jobs.fetch_add(1, Ordering::SeqCst);
+                        Ok(decision) => {
+                            let confidence = decision
+                                .confidence
+                                .map(|value| format!(" ({:.0}% confidence)", value * 100.0))
+                                .unwrap_or_default();
+                            let reason = format!(
+                                "Decisions API classified this page as {}{}",
+                                decision.category.replace('_', " "),
+                                confidence
+                            );
+                            state.db.record_filtered_discovery(
+                                run_id,
+                                execution_id,
+                                provider.name(),
+                                &result.url,
+                                result.title.as_deref(),
+                                result.snippet.as_deref(),
+                                &reason,
+                            )?;
+                            filtered_count += 1;
+                            counters.filtered.fetch_add(1, Ordering::SeqCst);
                         }
-                        UpsertOutcome::Existing => {}
+                        Err(error) => {
+                            state.db.record_failed_discovery(
+                                run_id,
+                                execution_id,
+                                provider.name(),
+                                &result.url,
+                                result.title.as_deref(),
+                                result.snippet.as_deref(),
+                                &error,
+                            )?;
+                            counters.errors.fetch_add(1, Ordering::SeqCst);
+                            counters.extraction_failures.fetch_add(1, Ordering::SeqCst);
+                        }
                     }
-                }
-                Err(error) if is_non_job_result(&error) => {
-                    state.db.record_filtered_discovery(
-                        run_id,
-                        execution_id,
-                        provider.name(),
-                        &result.url,
-                        result.title.as_deref(),
-                        result.snippet.as_deref(),
-                        &error,
-                    )?;
-                    filtered_count += 1;
-                    counters.filtered.fetch_add(1, Ordering::SeqCst);
                 }
                 Err(error) => {
                     state.db.record_failed_discovery(
@@ -459,7 +537,9 @@ async fn extract_candidate(
     query: &str,
     url: &str,
     timeout_seconds: u32,
-) -> Result<crate::models::CandidateJob, String> {
+    result_title: Option<&str>,
+    result_snippet: Option<&str>,
+) -> Result<ExtractedPage, String> {
     let cell = {
         let mut cache = extraction_cache
             .lock()
@@ -472,8 +552,21 @@ async fn extract_candidate(
     let extracted = cell
         .get_or_init(|| async {
             match provider {
-                Provider::Mock => Ok(mock_candidate(query, url)),
-                Provider::Bright(_) => fetch_and_extract(url, timeout_seconds).await,
+                Provider::Mock => {
+                    let candidate = mock_candidate(query, url);
+                    let page_text = format!(
+                        "{} {}",
+                        candidate.title,
+                        candidate.description.as_deref().unwrap_or_default()
+                    );
+                    Ok(ExtractedPage {
+                        candidate,
+                        page_text,
+                    })
+                }
+                Provider::Bright(_) => {
+                    fetch_and_extract(url, timeout_seconds, result_title, result_snippet).await
+                }
             }
         })
         .await
@@ -490,6 +583,42 @@ async fn extract_candidate(
         }
     }
     extracted
+}
+
+async fn decide_page(
+    cache: &DecisionCache,
+    client: Option<&DecisionsClient>,
+    page: &ExtractedPage,
+) -> Result<PageDecision, String> {
+    let Some(client) = client else {
+        return Ok(PageDecision::local_job_posting());
+    };
+    let url = page.candidate.source_url.clone();
+    let cell = {
+        let mut cache = cache
+            .lock()
+            .map_err(|_| "Decision cache unavailable".to_string())?;
+        cache
+            .entry(url.clone())
+            .or_insert_with(|| Arc::new(OnceCell::new()))
+            .clone()
+    };
+    let decision = cell
+        .get_or_init(|| async { client.classify_page(&page.candidate, &page.page_text).await })
+        .await
+        .clone();
+    if decision.is_err() {
+        let mut cache = cache
+            .lock()
+            .map_err(|_| "Decision cache unavailable".to_string())?;
+        if cache
+            .get(&url)
+            .is_some_and(|current| Arc::ptr_eq(current, &cell))
+        {
+            cache.remove(&url);
+        }
+    }
+    decision
 }
 
 fn current_settings(state: &AppState) -> Result<AppSettings, String> {
@@ -608,6 +737,8 @@ mod tests {
             "site:jobs.example.com \"Remote\" \"QA\"",
             "https://jobs.example.com/42",
             30,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -617,10 +748,12 @@ mod tests {
             "site:jobs.example.com \"LATAM\" \"SDET\"",
             "https://jobs.example.com/42",
             30,
+            None,
+            None,
         )
         .await
         .unwrap();
-        assert_eq!(first.title, second.title);
+        assert_eq!(first.candidate.title, second.candidate.title);
         assert_eq!(cache.lock().unwrap().len(), 1);
     }
 }

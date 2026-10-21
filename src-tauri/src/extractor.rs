@@ -9,13 +9,20 @@ use url::Url;
 
 use crate::{ats::detect_ats_board, models::CandidateJob, provider::quoted_terms};
 
-const NON_JOB_RESULT_PREFIX: &str = "NON_JOB_RESULT:";
+const MAX_PAGE_TEXT_CHARS: usize = 20_000;
 
-pub fn is_non_job_result(error: &str) -> bool {
-    error.starts_with(NON_JOB_RESULT_PREFIX)
+#[derive(Debug, Clone)]
+pub struct ExtractedPage {
+    pub candidate: CandidateJob,
+    pub page_text: String,
 }
 
-pub async fn fetch_and_extract(url: &str, timeout_seconds: u32) -> Result<CandidateJob, String> {
+pub async fn fetch_and_extract(
+    url: &str,
+    timeout_seconds: u32,
+    result_title: Option<&str>,
+    result_snippet: Option<&str>,
+) -> Result<ExtractedPage, String> {
     let client = Client::builder()
         .timeout(Duration::from_secs(timeout_seconds as u64))
         .redirect(Policy::none())
@@ -63,19 +70,44 @@ pub async fn fetch_and_extract(url: &str, timeout_seconds: u32) -> Result<Candid
     }
     let final_url = current_url.to_string();
     let html = response.text().await.map_err(|error| error.to_string())?;
-    extract_job(&html, &final_url)
+    extract_page(&html, &final_url, result_title, result_snippet)
 }
 
 pub fn extract_job(html: &str, source_url: &str) -> Result<CandidateJob, String> {
+    extract_page(html, source_url, None, None).map(|page| page.candidate)
+}
+
+pub fn extract_page(
+    html: &str,
+    source_url: &str,
+    result_title: Option<&str>,
+    result_snippet: Option<&str>,
+) -> Result<ExtractedPage, String> {
     let document = Html::parse_document(html);
     let canonical = canonical_url(&document, source_url);
     let app_data = page_app_data(&document);
+    let page_text = extract_page_text(&document, result_snippet);
     for value in json_ld_values(&document) {
         if let Some(posting) = find_job_posting(&value) {
-            return from_json_ld(posting, source_url, &canonical, app_data.as_ref());
+            if let Ok(candidate) = from_json_ld(posting, source_url, &canonical, app_data.as_ref()) {
+                return Ok(ExtractedPage {
+                    candidate,
+                    page_text,
+                });
+            }
         }
     }
-    fallback_extract(&document, source_url, &canonical)
+    let candidate = fallback_extract(
+        &document,
+        source_url,
+        &canonical,
+        result_title,
+        result_snippet,
+    )?;
+    Ok(ExtractedPage {
+        candidate,
+        page_text,
+    })
 }
 
 pub fn mock_candidate(query: &str, url: &str) -> CandidateJob {
@@ -267,9 +299,12 @@ fn fallback_extract(
     document: &Html,
     source_url: &str,
     canonical_url: &str,
+    result_title: Option<&str>,
+    result_snippet: Option<&str>,
 ) -> Result<CandidateJob, String> {
     let title = first_text(document, &["h1", "meta[property='og:title']", "title"])
-        .ok_or_else(|| "No reliable job title found".to_string())?;
+        .or_else(|| non_empty_text(result_title))
+        .unwrap_or_else(|| page_label(source_url));
     let description = first_text(
         document,
         &[
@@ -278,19 +313,8 @@ fn fallback_extract(
             "main",
             "article",
         ],
-    );
-    if description.as_ref().map(|value| value.len()).unwrap_or(0) < 120 {
-        return Err("Page does not contain enough job content".into());
-    }
-    if is_generic_career_page(
-        &title,
-        description.as_deref().unwrap_or_default(),
-        source_url,
-    ) {
-        return Err(format!(
-            "{NON_JOB_RESULT_PREFIX} page appears to be a generic careers or company page"
-        ));
-    }
+    )
+    .or_else(|| non_empty_text(result_snippet));
     let company = first_text(
         document,
         &["[class*='company']", "meta[property='og:site_name']"],
@@ -324,85 +348,40 @@ fn fallback_extract(
     })
 }
 
-fn is_generic_career_page(title: &str, description: &str, source_url: &str) -> bool {
-    let normalized_title = normalize_whitespace(title).to_ascii_lowercase();
-    let generic_title_markers = [
-        "about",
-        "available jobs",
-        "career opportunities",
-        "careers",
-        "current openings",
-        "explore exciting opportunities",
-        "join our pack",
-        "join our team",
-        "join the team",
-        "join us",
-        "job opportunities",
-        "jobs",
-        "life at",
-        "open positions",
-        "opportunities",
-        "our team",
-        "work with us",
-    ];
-    let title_prefix = normalized_title
-        .split(['|', '-', '·', ':'])
+fn extract_page_text(document: &Html, result_snippet: Option<&str>) -> String {
+    let selector = Selector::parse("body").expect("valid selector");
+    let body = document
+        .select(&selector)
         .next()
-        .map(str::trim)
+        .map(|node| normalize_whitespace(&node.text().collect::<Vec<_>>().join(" ")))
+        .filter(|text| !text.is_empty())
+        .or_else(|| non_empty_text(result_snippet))
         .unwrap_or_default();
-    if generic_title_markers
-        .iter()
-        .any(|marker| title_prefix == *marker || normalized_title == *marker)
-    {
-        return true;
-    }
+    body.chars().take(MAX_PAGE_TEXT_CHARS).collect()
+}
 
-    let generic_path = Url::parse(source_url)
+fn non_empty_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(normalize_whitespace)
+        .filter(|text| !text.is_empty())
+}
+
+fn page_label(source_url: &str) -> String {
+    Url::parse(source_url)
         .ok()
         .map(|url| {
-            let last_segment = url
+            let segment = url
                 .path_segments()
                 .and_then(|mut segments| segments.rfind(|segment| !segment.is_empty()))
                 .unwrap_or_default()
-                .to_ascii_lowercase();
-            matches!(
-                last_segment.as_str(),
-                "about"
-                    | "career"
-                    | "careers"
-                    | "current-openings"
-                    | "jobs"
-                    | "join-us"
-                    | "join-the-team"
-                    | "open-positions"
-                    | "opportunities"
-                    | "our-team"
-                    | "work-with-us"
-            )
+                .replace(['-', '_'], " ");
+            if segment.is_empty() {
+                url.host_str().unwrap_or("Web page").to_string()
+            } else {
+                segment
+            }
         })
-        .unwrap_or(false);
-    if !generic_path {
-        return false;
-    }
-
-    let normalized_description = description.to_ascii_lowercase();
-    let job_signal_count = [
-        "apply",
-        "benefits",
-        "experience",
-        "job title",
-        "qualifications",
-        "requirements",
-        "responsibilities",
-        "salary",
-        "skills",
-        "what you'll do",
-        "what you will do",
-    ]
-    .iter()
-    .filter(|signal| normalized_description.contains(**signal))
-    .count();
-    job_signal_count < 2
+        .unwrap_or_else(|| "Web page".into())
 }
 
 fn canonical_url(document: &Html, source_url: &str) -> String {
@@ -713,16 +692,19 @@ mod tests {
     }
 
     #[test]
-    fn rejects_pages_without_job_content() {
+    fn extracts_pages_without_job_content_for_decision_classification() {
         let html = "<html><head><title>Home</title></head><body>Hello</body></html>";
-        assert!(extract_job(html, "https://example.com").is_err());
+        let page = extract_page(html, "https://example.com", None, None).unwrap();
+        assert_eq!(page.candidate.title, "Home");
+        assert_eq!(page.page_text, "Hello");
     }
 
     #[test]
-    fn rejects_generic_careers_pages_with_long_copy() {
+    fn extracts_generic_careers_pages_for_decision_classification() {
         let html = r#"<html><head><title>Careers | Example</title></head><body><main>We are always looking for talented people to join our growing team. Learn about our culture, benefits, values, and the many opportunities available across the company. Explore our open positions and apply to work with us as we build the future together.</main></body></html>"#;
-        let error = extract_job(html, "https://example.com/careers").unwrap_err();
-        assert!(is_non_job_result(&error));
+        let page = extract_page(html, "https://example.com/careers", None, None).unwrap();
+        assert_eq!(page.candidate.title, "Careers | Example");
+        assert!(page.page_text.contains("open positions"));
     }
 
     #[test]
