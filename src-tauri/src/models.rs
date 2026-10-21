@@ -230,6 +230,7 @@ pub struct JobSummary {
     pub seniority_match: Option<i64>,
     pub location_match: Option<i64>,
     pub match_error: Option<String>,
+    pub match_rationale: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -241,6 +242,7 @@ pub struct OpportunityMatch {
     pub experience: Option<i64>,
     pub seniority: Option<i64>,
     pub location: Option<i64>,
+    pub rationale: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -9,6 +9,16 @@ use crate::models::{CandidateJob, OpportunityMatch, Profile};
 const DECISIONS_ENDPOINT: &str = "https://api.openai.com/v1/decisions";
 const DECISIONS_MODEL: &str = "gpt-6-luna";
 const MAX_MATCHING_PROFILE_CHARS: usize = 12_000;
+const MATCHING_PROMPT_VERSION: &str = "profile-match-v2";
+const MATCH_RATIONALES: [&str; 7] = [
+    "Strong skills alignment is balanced by a gap in directly relevant experience.",
+    "Relevant experience aligns, but some core skills are missing or only partially supported.",
+    "The role's seniority or scope differs from the experience demonstrated in the profile.",
+    "An explicit location or work eligibility requirement is not fully met.",
+    "The available profile or posting does not provide enough evidence to confirm all requirements.",
+    "Several smaller gaps contribute to the partial fit rather than one clear blocker.",
+    "The profile aligns closely with the role's stated requirements.",
+];
 
 #[derive(Clone)]
 pub struct DecisionsClient {
@@ -55,7 +65,10 @@ pub fn decision_input_hash(candidate: &CandidateJob, page_text: &str) -> String 
 }
 
 pub fn matching_profile_hash(profile: &Profile) -> String {
-    hash_value(json!({"profile": matching_profile(profile)}))
+    hash_value(json!({
+        "profile": matching_profile(profile),
+        "matchingPromptVersion": MATCHING_PROMPT_VERSION,
+    }))
 }
 
 fn hash_value(value: Value) -> String {
@@ -190,6 +203,15 @@ impl DecisionsClient {
                 "How compatible are the person's stated location, work authorization, and availability with the role's explicit location and eligibility requirements? If either side does not state this information, use a neutral assessment.",
                 "location",
             ),
+            json!({
+                "type": "choice",
+                "name": "match_rationale",
+                "instructions": "Choose the single explanation that best accounts for this overall assessment. Select a specific mismatch only when the posting or profile provides explicit evidence. If no major gap stands out, choose the combined-gaps or close-alignment explanation. Treat missing information as unknown and do not invent requirements.",
+                "choices": MATCH_RATIONALES.iter().map(|rationale| json!({
+                    "value": rationale,
+                    "description": rationale,
+                })).collect::<Vec<_>>(),
+            }),
         ];
         let value = self.request(input, questions).await?;
         let answers = value
@@ -211,6 +233,7 @@ impl DecisionsClient {
             experience: score_answer(answers, "experience_match"),
             seniority: score_answer(answers, "seniority_match"),
             location: score_answer(answers, "location_match"),
+            rationale: choice_answer(answers, "match_rationale"),
         }))
     }
 
@@ -315,6 +338,20 @@ fn score_answer(answers: &[Value], name: &str) -> Option<i64> {
     }
     let score = answer.get("score").and_then(Value::as_f64)?;
     Some((score.clamp(0.0, 4.0) * 25.0).round() as i64)
+}
+
+fn choice_answer(answers: &[Value], name: &str) -> Option<String> {
+    let choice = answers
+        .iter()
+        .find(|answer| answer.get("name").and_then(Value::as_str) == Some(name))?;
+    if choice.get("type").and_then(Value::as_str) != Some("choice") {
+        return None;
+    }
+    let value = choice.get("choice").and_then(Value::as_str)?;
+    MATCH_RATIONALES
+        .iter()
+        .find(|rationale| **rationale == value)
+        .map(|rationale| (*rationale).to_string())
 }
 
 fn matching_profile(profile: &Profile) -> Option<Value> {
