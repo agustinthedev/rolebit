@@ -86,11 +86,11 @@ The initial integration calls `POST https://api.brightdata.com/request` with an 
 
 ## Decisions API and profile matching
 
-Configure the OpenAI key in **Settings → Decisions API**. Bright Data ingestion requires this key: each fetched page is classified, and a page classified as one specific posting is sent in a second request for profile matching when professional profile details are available. The mock provider stays local and makes no OpenAI requests. Settings and manual connection tests warn that Decisions API requests may incur charges; saving settings does not start a run.
+Configure the OpenAI key in **Settings → Decisions API**. Bright Data ingestion requires this key: fetched pages are classified, and a page classified as one specific posting is sent in a second request for profile matching when professional profile details are available. Unchanged known postings reuse their saved decisions. The mock provider stays local and makes no OpenAI requests. Settings and manual connection tests warn that Decisions API requests may incur charges; saving settings does not start a run.
 
 Classification uses the page title, extracted company or board, source domain, and up to 20,000 characters of page text. Matching runs only after a page is classified as one specific opening. It sends job-relevant professional details such as skills, work history, education, projects, languages, location, and work eligibility. Names, preferred names, contact details, street address, profile links, project URLs, and credential URLs are excluded. Each opportunity stores an overall fit score, confidence, and skill, experience, seniority, and location scores.
 
-Saved opportunities are scored when they are rediscovered by a later ingestion. The dashboard highlights strong matches at 75% or higher; opportunity details show the full score breakdown and any scoring error.
+Saved opportunities are analyzed when first discovered. Later ingestions reuse the classification and match for unchanged postings; changed page evidence triggers reclassification and, if the page remains a posting, matching again. Changed professional profile data triggers matching only. The dashboard highlights strong matches at 75% or higher; opportunity details show the full score breakdown and any scoring error.
 
 ## Query generation and cost awareness
 
