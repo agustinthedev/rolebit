@@ -146,6 +146,14 @@ export interface JobSummary {
   lastSeenAt: string;
   updatedAt: string;
   contentUpdated: boolean;
+  classificationConfidence?: number | null;
+  matchScore?: number | null;
+  matchConfidence?: number | null;
+  skillsMatch?: number | null;
+  experienceMatch?: number | null;
+  seniorityMatch?: number | null;
+  locationMatch?: number | null;
+  matchError?: string | null;
 }
 
 export interface JobDiscovery {
@@ -234,6 +242,7 @@ export interface Overview {
   totalOpportunities: number;
   newOpportunities: number;
   recentlyUpdated: number;
+  strongMatches: number;
   activeQueries: number;
   lastIngestionAt?: string;
   nextIngestionAt?: string;

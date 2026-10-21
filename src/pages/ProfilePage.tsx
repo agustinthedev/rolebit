@@ -39,7 +39,7 @@ export function ProfilePage() {
     setBusy(true); setNotice(undefined); setError(undefined);
     const validationError = validateProfile(profile);
     if (validationError) { setError(validationError); setBusy(false); return; }
-    try { setProfile(await api.saveProfile(profile)); setNotice("Profile saved locally. Personal identifiers are not sent to matching by default."); }
+    try { setProfile(await api.saveProfile(profile)); setNotice("Profile saved locally. Your name, contact details, address, and profile links are excluded from Decisions API matching."); }
     catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
   };
@@ -64,7 +64,7 @@ export function ProfilePage() {
         </CollectionSection>
       </div>
       <aside className="profile-side">
-        <SurfaceCard className="profile-privacy"><span className="profile-privacy__icon"><ShieldCheck size={20} /></span><TechLabel>Local & private</TechLabel><h2>Keep the full story here.</h2><p>Personal details are saved in your local SQLite database. When matching is added, Rolebit will build an explicit, minimized payload instead of sending this entire profile automatically.</p></SurfaceCard>
+        <SurfaceCard className="profile-privacy"><span className="profile-privacy__icon"><ShieldCheck size={20} /></span><TechLabel>Local & private</TechLabel><h2>Keep the full story here.</h2><p>Personal details stay in local SQLite. After a page is classified as one specific posting, matching sends only relevant professional details such as skills, experience, education, projects, and work eligibility. Names, contact details, addresses, profile links, and project or credential URLs are excluded.</p></SurfaceCard>
         <CollectionSection icon={GraduationCap} label="Education" title="Education" onAdd={() => set("education", [...profile.education, blankEducation()])} compact>
           {profile.education.map((item, index) => <SurfaceCard className="profile-entry" key={item.id ?? `education-${index}`}><EntryHeader title={item.institution || "New education"} subtitle={item.degree} onRemove={() => set("education", profile.education.filter((_, itemIndex) => itemIndex !== index))} /><div className="profile-stack"><Field label="Institution"><Input value={item.institution} onChange={(event) => updateEducation(index, { ...item, institution: event.target.value })} placeholder="University or program" /></Field><Field label="Degree"><Input value={item.degree ?? ""} onChange={(event) => updateEducation(index, { ...item, degree: event.target.value })} placeholder="Degree / certification" /></Field><Field label="Field of study"><Input value={item.fieldOfStudy ?? ""} onChange={(event) => updateEducation(index, { ...item, fieldOfStudy: event.target.value })} placeholder="Computer Science" /></Field><div className="form-grid"><Field label="Start"><Input type="month" value={item.startDate ?? ""} onChange={(event) => updateEducation(index, { ...item, startDate: event.target.value })} /></Field><Field label="End"><Input type="month" value={item.endDate ?? ""} onChange={(event) => updateEducation(index, { ...item, endDate: event.target.value })} /></Field></div></div></SurfaceCard>)}
         </CollectionSection>
