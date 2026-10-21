@@ -55,7 +55,7 @@ impl SitePattern {
         if host != self.host && !host.ends_with(&format!(".{}", self.host)) {
             return false;
         }
-        if self.port.is_some() && url.port() != self.port {
+        if self.port.is_some() && url.port_or_known_default() != self.port {
             return false;
         }
         let path = url.path().trim_end_matches('/');
