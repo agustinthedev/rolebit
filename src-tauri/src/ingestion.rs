@@ -16,7 +16,7 @@ use crate::{
     extractor::{ExtractedPage, fetch_and_extract, mock_candidate},
     models::{AppSettings, IngestionProgress, Profile},
     provider::{BrightDataProvider, SearchResponse, mock_results},
-    query::{generate_queries, site_pattern_from_query},
+    query::generate_queries,
     secret,
 };
 
@@ -371,7 +371,6 @@ async fn process_query(
     let mut new_jobs = 0;
     let mut updated_jobs = 0;
     let mut diagnostic = None;
-    let expected_site = site_pattern_from_query(query);
     for page in 1..=pages {
         if state.cancel.load(Ordering::SeqCst) {
             break;
@@ -403,27 +402,6 @@ async fn process_query(
                 break;
             }
             counters.urls.fetch_add(1, Ordering::SeqCst);
-            if let Some(expected_site) = expected_site.as_ref()
-                && !expected_site.matches_url(&result.url)
-            {
-                let error = format!(
-                    "Filtered result outside expected site pattern {}: {}",
-                    expected_site.normalized(),
-                    result.url,
-                );
-                state.db.record_filtered_discovery(
-                    run_id,
-                    execution_id,
-                    provider.name(),
-                    &result.url,
-                    result.title.as_deref(),
-                    result.snippet.as_deref(),
-                    &error,
-                )?;
-                filtered_count += 1;
-                counters.filtered.fetch_add(1, Ordering::SeqCst);
-                continue;
-            }
             candidate_count += 1;
             let extracted = extract_candidate(
                 extraction_cache,
@@ -438,27 +416,6 @@ async fn process_query(
             match extracted {
                 Ok(page) => {
                     let candidate = &page.candidate;
-                    if let Some(expected_site) = expected_site.as_ref()
-                        && !expected_site.matches_url(&candidate.canonical_url)
-                    {
-                        let error = format!(
-                            "Filtered canonical URL outside expected site pattern {}: {}",
-                            expected_site.normalized(),
-                            candidate.canonical_url,
-                        );
-                        state.db.record_filtered_discovery(
-                            run_id,
-                            execution_id,
-                            provider.name(),
-                            &result.url,
-                            result.title.as_deref(),
-                            result.snippet.as_deref(),
-                            &error,
-                        )?;
-                        filtered_count += 1;
-                        counters.filtered.fetch_add(1, Ordering::SeqCst);
-                        continue;
-                    }
                     let stored_decision = state.db.stored_decision(candidate)?;
                     match decide_page(
                         decision_cache,

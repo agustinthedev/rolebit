@@ -77,7 +77,7 @@ Browser preview data is clearly labeled and never enters a production user's SQL
 1. Open Settings or the first-run wizard.
 2. Choose **Bright Data SERP**.
 3. Enter the API key and SERP zone identifier.
-4. Set Google's `gl` country and `hl` language independently from the Locations search list.
+4. Set Google's two-letter `gl` country code and `hl` language independently from the Locations search list. The default country is Uruguay (`uy`).
 5. Optionally choose **Test connection**. The interface warns that this explicit test may consume one paid request.
 
 The key is stored through Windows Credential Manager and is never written to SQLite, frontend storage, source control, logs, or diagnostics. Rolebit never runs a paid search simply because the application started or settings were saved. A live request occurs only after an explicit test, manual ingestion, or a schedule the user enabled.
@@ -114,7 +114,7 @@ Configuration → Queries → SERP → Candidate URLs → Fetch → Extract → 
 
 Candidate fetches allow HTTP/HTTPS only. Direct and DNS-resolved loopback, private, link-local, and local destinations are rejected. Redirects are followed manually and revalidated before each request. Rolebit does not bypass authentication, CAPTCHAs, or access controls and never executes downloaded scripts.
 
-Extraction prefers structured `JobPosting` JSON-LD and otherwise gathers page evidence from HTML. The Decisions API classifies each page instead of local title, path, or content heuristics rejecting generic results before classification. Careers, contact, company, and other pages are recorded as filtered discoveries; only specific postings become opportunities. Failed or unresolved candidates remain associated with their query execution and are visible in ingestion history; missing fields are not invented.
+Extraction prefers structured `JobPosting` JSON-LD and otherwise gathers page evidence from HTML. Results are no longer rejected by a local host/path check before extraction, including when a page redirects to a canonical URL outside the searched ATS pattern. The Decisions API classifies each fetched page instead of local title, path, or content heuristics rejecting generic results before classification. Careers, contact, company, and other pages are recorded as filtered discoveries; only specific postings become opportunities. Failed or unresolved candidates remain associated with their query execution and are visible in ingestion history; missing fields are not invented.
 
 ## Deduplication and attribution
 
