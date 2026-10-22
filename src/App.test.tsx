@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import App from "./App";
@@ -8,7 +8,11 @@ describe("Rolebit application shell", () => {
     render(<App />);
     expect(screen.getByText("Opening your local library…")).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "Your next role, found." })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /All Opportunities/i })).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("navigation", { name: "Primary navigation" })).getByRole("button", {
+        name: /All Opportunities/i,
+      }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Browser preview · demo data")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Profile" })).toBeInTheDocument();
   });
