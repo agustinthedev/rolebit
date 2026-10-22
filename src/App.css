@@ -258,6 +258,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, [role="switch"]
   .filter-bar { grid-template-columns: minmax(220px,1.4fr) repeat(2,minmax(130px,.8fr)) minmax(140px,.8fr); }.filter-bar > :nth-child(5) { grid-column: 2 / 3; }.filter-bar--secondary { grid-template-columns: repeat(3,1fr); }.active-filter-copy { grid-column:1/-1; justify-self:start; }
   .run-row { grid-template-columns:38px minmax(170px,1.4fr) 95px repeat(3,minmax(65px,.6fr)) 18px; }.run-row > span:nth-of-type(7) { display:none; }
 }
+.profile-education-dates input[type="month"] { min-width: 0; }
+
 @media (max-width: 1080px) {
   .app-shell { grid-template-columns: 76px minmax(0,1fr); }.sidebar .brand > div,.nav-item span,.local-card > div,.preview-badge { display:none; }.sidebar { align-items:center; padding-inline:10px; }.sidebar__nav { width:100%; }.nav-item { justify-content:center; padding:0; }.local-card { padding:9px; }.main-content { padding:25px 20px 40px; }
   .metric-grid { grid-template-columns:repeat(2,1fr); }.overview-layout { grid-template-columns:1fr; }.overview-side { grid-template-columns:repeat(2,1fr); }
