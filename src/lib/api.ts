@@ -98,6 +98,16 @@ const demoJobs: JobDetail[] = [
   lastSeenAt: hoursAgo(index + 1),
   updatedAt: hoursAgo(index * 3 + 1),
   contentUpdated: index === 1 || index === 4,
+  matchRationale: [
+    "Strong skills alignment is balanced by a gap in directly relevant experience.",
+    "Relevant experience aligns, but some core skills are missing or only partially supported.",
+    "The role's seniority or scope differs from the experience demonstrated in the profile.",
+    "The profile aligns closely with the role's stated requirements.",
+    "The profile aligns closely with the role's stated requirements.",
+    "The available profile or posting does not provide enough evidence to confirm all requirements.",
+    "Several smaller gaps contribute to the partial fit rather than one clear blocker.",
+    "An explicit location or work eligibility requirement is not fully met.",
+  ][index],
   description: `${company} is looking for a ${title} to join a thoughtful, distributed product team. You will improve reliable delivery, partner across engineering and product, and shape practical systems that make excellent work easier. This is local browser-preview data; desktop ingestion stores verified postings in SQLite.`,
   canonicalUrl: `https://${sourceDomain}/rolebit-demo/${index + 1}`,
   externalId: `RB-${1000 + index}`,
@@ -168,7 +178,7 @@ function overview() {
     lastIngestionAt: latest?.completedAt,
     nextIngestionAt: demoSettings.scheduleEnabled ? new Date(new Date(latest.completedAt!).getTime() + demoSettings.scheduleIntervalHours * 3_600_000).toISOString() : undefined,
     ingestionStatus: latest?.status ?? "idle",
-    recentJobs: demoJobs.slice(0, 5),
+    recentJobs: [...demoJobs].filter((job) => job.trackingStatus !== "dismissed" && job.lifecycleStatus !== "closed").sort((a, b) => (b.matchScore ?? -1) - (a.matchScore ?? -1) || b.firstSeenAt.localeCompare(a.firstSeenAt)).slice(0, 5),
     activity: Array.from({ length: 28 }, (_, index) => ({ date: hoursAgo((27 - index) * 24), status: index % 8 === 0 ? "partial" : index % 3 === 0 ? "completed" : "empty", newJobs: index % 3 === 0 ? (index % 5) + 1 : 0 })),
     latestRun: latest,
   };
@@ -180,7 +190,10 @@ async function demoInvoke<T>(command: string, args: Record<string, unknown> = {}
     case "get_bootstrap": return { settings: demoSettings, configuration: demoConfig, overview: overview(), recentRuns: demoRuns } as T;
     case "get_overview": return overview() as T;
     case "get_search_configuration": return demoConfig as T;
-    case "save_search_configuration": demoConfig = args.configuration as SearchConfiguration; return demoConfig as T;
+    case "save_search_configuration": {
+      demoConfig = { ...(args.configuration as SearchConfiguration), pagesPerQuery: demoSettings.pagesPerQuery };
+      return demoConfig as T;
+    }
     case "get_profile": return demoProfile as T;
     case "save_profile": demoProfile = args.profile as Profile; return demoProfile as T;
     case "preview_queries": return preview(args.input as QueryPreviewInput) as T;
@@ -188,12 +201,13 @@ async function demoInvoke<T>(command: string, args: Record<string, unknown> = {}
     case "save_settings": {
       const input = args.settings as SaveSettingsInput;
       demoSettings = { ...demoSettings, ...input, hasApiKey: Boolean(input.apiKey || demoSettings.hasApiKey), hasDecisionsApiKey: Boolean(input.decisionsApiKey || demoSettings.hasDecisionsApiKey) };
+      demoConfig = { ...demoConfig, pagesPerQuery: demoSettings.pagesPerQuery };
       return demoSettings as T;
     }
     case "complete_onboarding": {
       const input = args.input as { settings: SaveSettingsInput; configuration: SearchConfiguration };
-      demoConfig = input.configuration;
       demoSettings = { ...demoSettings, ...input.settings, onboardingComplete: true, hasApiKey: Boolean(input.settings.apiKey), hasDecisionsApiKey: Boolean(input.settings.decisionsApiKey) };
+      demoConfig = { ...input.configuration, pagesPerQuery: demoSettings.pagesPerQuery };
       return { settings: demoSettings, configuration: demoConfig, overview: overview(), recentRuns: demoRuns } as T;
     }
     case "list_jobs": return listDemoJobs(args.request as JobListRequest) as T;
@@ -208,7 +222,7 @@ async function demoInvoke<T>(command: string, args: Record<string, unknown> = {}
       const run = demoRuns.find((item) => item.id === args.id)!;
       return { ...run, queries: Array.from({ length: 8 }, (_, index) => ({ id: index + 1, query: generatedQueries(demoConfig)[index], status: index === 7 && run.status === "partial" ? "failed" : "completed", resultCount: 8 - (index % 3), candidateCount: 5, filteredCount: index % 4 === 0 ? 1 : 0, newJobs: index % 3 === 0 ? 1 : 0, updatedJobs: index === 2 ? 1 : 0, error: index === 7 && run.status === "partial" ? "Rate limited after retries" : undefined, startedAt: run.startedAt, completedAt: run.completedAt })) } as T;
     }
-    case "get_diagnostics": return { databasePath: demoSettings.databasePath, databaseSizeBytes: 482_304, sqliteVersion: "3.50.4", appVersion: demoSettings.appVersion, schemaVersion: 1 } as T;
+    case "get_diagnostics": return { databasePath: demoSettings.databasePath, databaseSizeBytes: 482_304, sqliteVersion: "3.50.4", appVersion: demoSettings.appVersion, schemaVersion: 8 } as T;
     case "test_bright_data_connection": return "Browser preview cannot make paid requests. Run the desktop app to test this connection." as T;
     case "test_decisions_connection": return "Browser preview cannot make API requests. Run the desktop app to test this connection." as T;
     case "start_ingestion": return simulateRun() as T;
@@ -229,6 +243,7 @@ function listDemoJobs(request: JobListRequest): JobPage {
   });
   items = [...items].sort((a, b) => {
     if (request.sort === "title") return a.title.localeCompare(b.title);
+    if (request.sort === "match") return (b.matchScore ?? -1) - (a.matchScore ?? -1) || b.firstSeenAt.localeCompare(a.firstSeenAt);
     const left = request.sort === "updated" ? a.updatedAt : a.firstSeenAt;
     const right = request.sort === "updated" ? b.updatedAt : b.firstSeenAt;
     return request.sort === "oldest" ? left.localeCompare(right) : right.localeCompare(left);

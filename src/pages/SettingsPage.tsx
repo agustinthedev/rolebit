@@ -52,7 +52,7 @@ export function SettingsPage({ initial, initialConfiguration, onSaved, onConfigu
       {error && <InlineNotice tone="error" title="Could not complete that action">{error}</InlineNotice>}
     </div>}
     <div className="settings-grid">
-      <SearchConfigurationSection initial={initialConfiguration} settings={initial} onSaved={onConfigurationSaved} />
+      <SearchConfigurationSection initial={initialConfiguration} settings={settings} onSaved={onConfigurationSaved} />
       <SettingsSection icon={KeyRound} label="Bright Data" title="Search provider">
         <div className="form-grid">
           <Field label="Provider"><Select value={settings.provider} onChange={(event) => set("provider", event.target.value as SaveSettingsInput["provider"])}><option value="mock">Local mock provider</option><option value="bright_data">Bright Data SERP</option></Select></Field>

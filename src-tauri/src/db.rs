@@ -314,6 +314,11 @@ ALTER TABLE jobs ADD COLUMN decision_input_hash TEXT;
 ALTER TABLE jobs ADD COLUMN match_profile_hash TEXT;
 "#;
 
+const MIGRATION_8: &str = r#"
+ALTER TABLE jobs ADD COLUMN match_rationale TEXT;
+CREATE INDEX IF NOT EXISTS idx_jobs_match_score ON jobs(match_score DESC, first_seen_at DESC);
+"#;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpsertOutcome {
     New,
@@ -429,6 +434,17 @@ impl Database {
                 )
                 .map_err(|error| error.to_string())?;
         }
+        if current_version < 8 {
+            transaction
+                .execute_batch(MIGRATION_8)
+                .map_err(|error| error.to_string())?;
+            transaction
+                .execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES(8, ?1)",
+                    [now()],
+                )
+                .map_err(|error| error.to_string())?;
+        }
         seed_defaults(&transaction)?;
         transaction.commit().map_err(|error| error.to_string())?;
         Ok(database)
@@ -497,11 +513,6 @@ impl Database {
             .map_err(|error| error.to_string())?;
         insert_items(&transaction, "site", &config.sites)?;
         insert_items(&transaction, "location", &config.locations)?;
-        set_setting(
-            &transaction,
-            "pages_per_query",
-            &config.pages_per_query.to_string(),
-        )?;
         transaction.commit().map_err(|error| error.to_string())
     }
 
@@ -962,11 +973,12 @@ impl Database {
             Option<i64>,
             Option<i64>,
             Option<String>,
+            Option<String>,
         )> = connection
             .query_row(
                 "SELECT decision_input_hash, match_profile_hash, classification_confidence,
                  match_score, match_confidence, skills_match, experience_match, seniority_match,
-                 location_match, match_error FROM jobs
+                 location_match, match_error, match_rationale FROM jobs
                  WHERE source_key=?1 OR canonical_url=?2 LIMIT 1",
                 params![source_key, candidate.canonical_url],
                 |row| {
@@ -981,6 +993,7 @@ impl Database {
                         row.get(7)?,
                         row.get(8)?,
                         row.get(9)?,
+                        row.get(10)?,
                     ))
                 },
             )
@@ -998,6 +1011,7 @@ impl Database {
                 seniority,
                 location,
                 match_error,
+                rationale,
             )| StoredDecision {
                 decision_input_hash,
                 match_profile_hash,
@@ -1009,6 +1023,7 @@ impl Database {
                     experience,
                     seniority,
                     location,
+                    rationale,
                 }),
                 match_error,
             },
@@ -1112,7 +1127,8 @@ impl Database {
                  content_updated=?17, reopened=?13, classification_confidence=?18,
                  match_score=?19, match_confidence=?20, skills_match=?21,
                  experience_match=?22, seniority_match=?23, location_match=?24,
-                 match_error=?25, decision_input_hash=?26, match_profile_hash=?27 WHERE id=?1",
+                 match_error=?25, decision_input_hash=?26, match_profile_hash=?27,
+                 match_rationale=?28 WHERE id=?1",
                 params![
                     job_id, candidate.canonical_url, candidate.external_id, candidate.source_domain,
                     candidate.title, candidate.company, candidate.description, candidate.location,
@@ -1125,6 +1141,7 @@ impl Database {
                     match_error,
                     decision_input_hash,
                     match_profile_hash,
+                    matching.and_then(|score| score.rationale.as_deref()),
                 ],
             ).map_err(|error| error.to_string())?;
             (
@@ -1141,9 +1158,9 @@ impl Database {
                  location, remote_status, employment_type, published_at, expires_at, lifecycle_status,
                  tracking_status, extraction_status, content_hash, first_seen_at, last_seen_at, updated_at,
                  classification_confidence, match_score, match_confidence, skills_match, experience_match,
-                 seniority_match, location_match, match_error, decision_input_hash, match_profile_hash)
+                 seniority_match, location_match, match_error, decision_input_hash, match_profile_hash, match_rationale)
                  VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'active', 'new', ?13, ?14, ?15, ?15, ?15,
-                 ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+                 ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
                 params![
                     source_key, candidate.canonical_url, candidate.external_id, candidate.source_domain,
                     candidate.title, candidate.company, candidate.description, candidate.location,
@@ -1156,6 +1173,7 @@ impl Database {
                     match_error,
                     decision_input_hash,
                     match_profile_hash,
+                    matching.and_then(|score| score.rationale.as_deref()),
                 ],
             ).map_err(|error| error.to_string())?;
             (transaction.last_insert_rowid(), UpsertOutcome::New)
@@ -1273,8 +1291,9 @@ impl Database {
             None
         };
         let mut recent_statement = connection.prepare(
-            "SELECT id,title,company,location,remote_status,source_domain,lifecycle_status,tracking_status,extraction_status,first_seen_at,last_seen_at,updated_at,content_updated,classification_confidence,match_score,match_confidence,skills_match,experience_match,seniority_match,location_match,match_error
-             FROM jobs ORDER BY first_seen_at DESC, id DESC LIMIT 5"
+            "SELECT id,title,company,location,remote_status,source_domain,lifecycle_status,tracking_status,extraction_status,first_seen_at,last_seen_at,updated_at,content_updated,classification_confidence,match_score,match_confidence,skills_match,experience_match,seniority_match,location_match,match_error,match_rationale
+             FROM jobs WHERE tracking_status <> 'dismissed' AND lifecycle_status <> 'closed'
+             ORDER BY CASE WHEN match_score IS NULL THEN 1 ELSE 0 END, match_score DESC, first_seen_at DESC, id DESC LIMIT 5"
         ).map_err(|error| error.to_string())?;
         let recent_jobs = recent_statement
             .query_map([], row_to_job_summary)
@@ -1385,10 +1404,13 @@ impl Database {
             "updated" => "updated_at DESC, id DESC",
             "seen" => "last_seen_at DESC, id DESC",
             "title" => "title COLLATE NOCASE ASC, id ASC",
+            "match" => {
+                "CASE WHEN match_score IS NULL THEN 1 ELSE 0 END, match_score DESC, first_seen_at DESC, id DESC"
+            }
             _ => "first_seen_at DESC, id DESC",
         };
         let list_sql = format!(
-            "SELECT id,title,company,location,remote_status,source_domain,lifecycle_status,tracking_status,extraction_status,first_seen_at,last_seen_at,updated_at,content_updated,classification_confidence,match_score,match_confidence,skills_match,experience_match,seniority_match,location_match,match_error
+            "SELECT id,title,company,location,remote_status,source_domain,lifecycle_status,tracking_status,extraction_status,first_seen_at,last_seen_at,updated_at,content_updated,classification_confidence,match_score,match_confidence,skills_match,experience_match,seniority_match,location_match,match_error,match_rationale
              FROM jobs{clause} ORDER BY {ordering} LIMIT ? OFFSET ?"
         );
         let mut list_values = values;
@@ -1422,14 +1444,14 @@ impl Database {
     pub fn get_job(&self, id: i64) -> Result<JobDetail, String> {
         let connection = self.connect()?;
         let mut detail = connection.query_row(
-            "SELECT id,title,company,location,remote_status,source_domain,lifecycle_status,tracking_status,extraction_status,first_seen_at,last_seen_at,updated_at,content_updated,classification_confidence,match_score,match_confidence,skills_match,experience_match,seniority_match,location_match,match_error,
+            "SELECT id,title,company,location,remote_status,source_domain,lifecycle_status,tracking_status,extraction_status,first_seen_at,last_seen_at,updated_at,content_updated,classification_confidence,match_score,match_confidence,skills_match,experience_match,seniority_match,location_match,match_error,match_rationale,
              description,canonical_url,external_id,employment_type,published_at,expires_at,reopened FROM jobs WHERE id=?1",
             [id],
             |row| Ok(JobDetail {
                 summary: row_to_job_summary(row)?,
-                description: row.get(21)?, canonical_url: row.get(22)?, external_id: row.get(23)?,
-                employment_type: row.get(24)?, published_at: row.get(25)?, expires_at: row.get(26)?,
-                reopened: row.get(27)?, discoveries: Vec::new(),
+                description: row.get(22)?, canonical_url: row.get(23)?, external_id: row.get(24)?,
+                employment_type: row.get(25)?, published_at: row.get(26)?, expires_at: row.get(27)?,
+                reopened: row.get(28)?, discoveries: Vec::new(),
             }),
         ).map_err(|error| error.to_string())?;
         let mut statement = connection.prepare(
@@ -1826,6 +1848,7 @@ fn row_to_job_summary(row: &Row<'_>) -> rusqlite::Result<JobSummary> {
         seniority_match: row.get(18)?,
         location_match: row.get(19)?,
         match_error: row.get(20)?,
+        match_rationale: row.get(21)?,
     })
 }
 
@@ -1960,7 +1983,7 @@ mod tests {
         let configuration = database.get_configuration().unwrap();
         assert_eq!(configuration.sites.len(), 3);
         assert_eq!(crate::query::generate_queries(&configuration).len(), 12);
-        assert_eq!(database.diagnostics("test").unwrap().schema_version, 7);
+        assert_eq!(database.diagnostics("test").unwrap().schema_version, 8);
         drop(database);
         fs::remove_dir_all(directory).unwrap();
     }
@@ -1988,7 +2011,7 @@ mod tests {
         drop(connection);
 
         let database = Database::initialize(path).unwrap();
-        assert_eq!(database.diagnostics("test").unwrap().schema_version, 7);
+        assert_eq!(database.diagnostics("test").unwrap().schema_version, 8);
         let connection = database.connect().unwrap();
         assert!(
             connection
