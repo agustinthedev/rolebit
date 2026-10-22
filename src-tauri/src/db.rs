@@ -1404,7 +1404,9 @@ impl Database {
             "updated" => "updated_at DESC, id DESC",
             "seen" => "last_seen_at DESC, id DESC",
             "title" => "title COLLATE NOCASE ASC, id ASC",
-            "match" => "CASE WHEN match_score IS NULL THEN 1 ELSE 0 END, match_score DESC, first_seen_at DESC, id DESC",
+            "match" => {
+                "CASE WHEN match_score IS NULL THEN 1 ELSE 0 END, match_score DESC, first_seen_at DESC, id DESC"
+            }
             _ => "first_seen_at DESC, id DESC",
         };
         let list_sql = format!(
