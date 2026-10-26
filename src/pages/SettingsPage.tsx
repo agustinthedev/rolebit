@@ -29,8 +29,12 @@ export function SettingsPage({ initial, initialConfiguration, onSaved, onConfigu
   const save = async () => {
     setBusy(true); setError(undefined); setNotice(undefined);
     try {
-      const savedConfiguration = await api.saveConfiguration(configuration);
+      const submittedConfiguration = configuration;
+      const savedConfiguration = await api.saveConfiguration(submittedConfiguration);
       setSavedConfiguration(savedConfiguration);
+      setConfiguration((current) =>
+        JSON.stringify(current) === JSON.stringify(submittedConfiguration) ? savedConfiguration : current
+      );
       onConfigurationSaved(savedConfiguration);
       const saved = await api.saveSettings({ ...settings, apiKey: removeKey ? "" : apiKey || undefined, decisionsApiKey: removeDecisionsKey ? "" : decisionsApiKey || undefined });
       onSaved(saved); setApiKey(""); setRemoveKey(false); setDecisionsApiKey(""); setRemoveDecisionsKey(false); setNotice("Settings and search configuration saved.");
