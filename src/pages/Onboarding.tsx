@@ -13,6 +13,8 @@ const draftKey = "rolebit:onboarding-draft";
 const defaults: SearchConfiguration = {
   sites: ["jobs.ashbyhq.com", "jobs.lever.co", "job-boards.greenhouse.io"].map((value) => ({ value, enabled: true })),
   locations: ["Uruguay", "LATAM", "Remote", "Worldwide"].map((value) => ({ value, enabled: true })),
+  roles: [],
+  includeRoles: false,
   pagesPerQuery: 1,
 };
 
@@ -71,7 +73,7 @@ function readDraft(): { step: number; settings: SaveSettingsInput; configuration
     if (!raw) return undefined;
     const parsed = JSON.parse(raw) as { step?: number; settings?: SaveSettingsInput; configuration?: SearchConfiguration };
     if (!parsed.settings || !parsed.configuration) return undefined;
-    return { step: Math.max(0, Math.min(5, parsed.step ?? 0)), settings: parsed.settings, configuration: parsed.configuration };
+    return { step: Math.max(0, Math.min(5, parsed.step ?? 0)), settings: parsed.settings, configuration: { ...defaults, ...parsed.configuration, roles: parsed.configuration.roles ?? [], includeRoles: parsed.configuration.includeRoles ?? false } };
   } catch {
     return undefined;
   }

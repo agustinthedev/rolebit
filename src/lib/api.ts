@@ -31,6 +31,8 @@ const hoursAgo = (hours: number) => new Date(now.getTime() - hours * 3_600_000).
 let demoConfig: SearchConfiguration = {
   sites: ["jobs.ashbyhq.com", "jobs.lever.co", "job-boards.greenhouse.io"].map((value, index) => ({ id: index + 1, value, enabled: true })),
   locations: ["Uruguay", "LATAM", "Remote", "Worldwide"].map((value, index) => ({ id: index + 10, value, enabled: true })),
+  roles: [],
+  includeRoles: false,
   pagesPerQuery: 1,
 };
 
@@ -130,12 +132,15 @@ let progressListener: ((progress: IngestionProgress) => void) | undefined;
 function generatedQueries(configuration: SearchConfiguration): string[] {
   const values = (items: SearchConfiguration["sites"]) => items.filter((item) => item.enabled);
   const seen = new Set<string>();
+  const roles = configuration.includeRoles ? values(configuration.roles).filter((item) => item.value.trim()) : [];
   for (const site of values(configuration.sites)) {
     const normalizedSite = normalizeSite(site.value);
     if (!normalizedSite) continue;
     for (const location of values(configuration.locations)) {
       const quote = (value: string) => `"${value.trim().replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
-      seen.add([`site:${normalizedSite}`, location.value.trim() && quote(location.value)].filter(Boolean).join(" "));
+      for (const role of roles.length ? roles : [undefined]) {
+        seen.add([`site:${normalizedSite}`, location.value.trim() && quote(location.value), role && quote(role.value)].filter(Boolean).join(" "));
+      }
     }
   }
   return [...seen];

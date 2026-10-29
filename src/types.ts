@@ -9,6 +9,8 @@ export interface SearchItem {
 export interface SearchConfiguration {
   sites: SearchItem[];
   locations: SearchItem[];
+  roles: SearchItem[];
+  includeRoles: boolean;
   pagesPerQuery: number;
 }
 

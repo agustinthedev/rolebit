@@ -6,6 +6,8 @@ import type { AppSettings, SearchConfiguration } from "../types";
 const configuration: SearchConfiguration = {
   sites: [{ value: "jobs.example.com", enabled: true }],
   locations: [{ value: "Remote", enabled: true }],
+  roles: [],
+  includeRoles: false,
   pagesPerQuery: 1,
 };
 

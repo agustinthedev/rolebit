@@ -13,6 +13,10 @@ pub struct SearchItem {
 pub struct SearchConfiguration {
     pub sites: Vec<SearchItem>,
     pub locations: Vec<SearchItem>,
+    #[serde(default)]
+    pub roles: Vec<SearchItem>,
+    #[serde(default)]
+    pub include_roles: bool,
     pub pages_per_query: u32,
 }
 

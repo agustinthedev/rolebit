@@ -482,6 +482,7 @@ impl Database {
             .map_err(|error| error.to_string())?;
         let mut sites = Vec::new();
         let mut locations = Vec::new();
+        let mut roles = Vec::new();
         for row in rows {
             let (id, kind, value, enabled) = row.map_err(|error| error.to_string())?;
             let item = SearchItem {
@@ -492,13 +493,17 @@ impl Database {
             match kind.as_str() {
                 "site" => sites.push(item),
                 "location" => locations.push(item),
+                "role" => roles.push(item),
                 _ => {}
             }
         }
         let pages_per_query = setting_i64(&connection, "pages_per_query", 1)? as u32;
+        let include_roles = setting_bool(&connection, "include_roles_in_queries", false)?;
         Ok(SearchConfiguration {
             sites,
             locations,
+            roles,
+            include_roles,
             pages_per_query,
         })
     }
@@ -513,6 +518,12 @@ impl Database {
             .map_err(|error| error.to_string())?;
         insert_items(&transaction, "site", &config.sites)?;
         insert_items(&transaction, "location", &config.locations)?;
+        insert_items(&transaction, "role", &config.roles)?;
+        set_setting(
+            &transaction,
+            "include_roles_in_queries",
+            if config.include_roles { "true" } else { "false" },
+        )?;
         transaction.commit().map_err(|error| error.to_string())
     }
 
@@ -1600,6 +1611,7 @@ fn seed_defaults(transaction: &Transaction<'_>) -> Result<(), String> {
         ("request_timeout_seconds", "30"),
         ("retry_count", "2"),
         ("pages_per_query", "1"),
+        ("include_roles_in_queries", "false"),
         ("estimated_cost_per_request", ""),
         ("request_budget", ""),
         ("schedule_enabled", "false"),

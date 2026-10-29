@@ -11,6 +11,8 @@ describe("browser preview data boundary", () => {
         { value: "disabled.example.com", enabled: false },
       ],
       locations: [{ value: "Remote", enabled: true }, { value: "", enabled: true }],
+      roles: [],
+      includeRoles: false,
       pagesPerQuery: 2,
     };
     const result = await api.previewQueries({ configuration, scheduleIntervalHours: 12, estimatedCostPerRequest: 0.001 });
@@ -28,6 +30,8 @@ describe("browser preview data boundary", () => {
         { value: "https://apply.workable.com/*/j/*/", enabled: true },
       ],
       locations: [{ value: "Uruguay", enabled: true }],
+      roles: [],
+      includeRoles: false,
       pagesPerQuery: 1,
     };
     const result = await api.previewQueries({ configuration });
@@ -49,6 +53,8 @@ describe("browser preview data boundary", () => {
     const configuration: SearchConfiguration = {
       sites: [{ value: "jobs.example.com", enabled: true }],
       locations: [{ value: "Remote", enabled: true }],
+      roles: [],
+      includeRoles: false,
       pagesPerQuery: 1,
     };
     const sixHours = await api.previewQueries({ configuration, scheduleIntervalHours: 6 });
