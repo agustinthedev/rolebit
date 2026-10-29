@@ -731,7 +731,7 @@ impl Database {
             onboarding_complete: setting_bool(&connection, "onboarding_complete", false)?,
             provider: setting(&connection, "provider", "mock")?,
             serp_zone: setting(&connection, "serp_zone", "")?,
-            google_gl: setting(&connection, "google_gl", "us")?,
+            google_gl: setting(&connection, "google_gl", "uy")?,
             google_hl: setting(&connection, "google_hl", "en")?,
             request_concurrency: setting_i64(&connection, "request_concurrency", 3)? as u32,
             request_timeout_seconds: setting_i64(&connection, "request_timeout_seconds", 30)?
@@ -1594,7 +1594,7 @@ fn seed_defaults(transaction: &Transaction<'_>) -> Result<(), String> {
     let defaults = [
         ("provider", "mock"),
         ("serp_zone", ""),
-        ("google_gl", "us"),
+        ("google_gl", "uy"),
         ("google_hl", "en"),
         ("request_concurrency", "3"),
         ("request_timeout_seconds", "30"),
