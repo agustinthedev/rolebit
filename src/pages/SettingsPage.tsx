@@ -13,6 +13,8 @@ function editable(settings: AppSettings): SaveSettingsInput {
 
 export function SettingsPage({ initial, initialConfiguration, onSaved, onConfigurationSaved }: { initial: AppSettings; initialConfiguration: SearchConfiguration; onSaved: (settings: AppSettings) => void; onConfigurationSaved: (configuration: SearchConfiguration) => void }) {
   const [settings, setSettings] = useState(editable(initial));
+  const [configuration, setConfiguration] = useState(initialConfiguration);
+  const [savedConfiguration, setSavedConfiguration] = useState(initialConfiguration);
   const [apiKey, setApiKey] = useState("");
   const [removeKey, setRemoveKey] = useState(false);
   const [decisionsApiKey, setDecisionsApiKey] = useState("");
@@ -27,8 +29,15 @@ export function SettingsPage({ initial, initialConfiguration, onSaved, onConfigu
   const save = async () => {
     setBusy(true); setError(undefined); setNotice(undefined);
     try {
+      const submittedConfiguration = configuration;
+      const savedConfiguration = await api.saveConfiguration(submittedConfiguration);
+      setSavedConfiguration(savedConfiguration);
+      setConfiguration((current) =>
+        JSON.stringify(current) === JSON.stringify(submittedConfiguration) ? savedConfiguration : current
+      );
+      onConfigurationSaved(savedConfiguration);
       const saved = await api.saveSettings({ ...settings, apiKey: removeKey ? "" : apiKey || undefined, decisionsApiKey: removeDecisionsKey ? "" : decisionsApiKey || undefined });
-      onSaved(saved); setApiKey(""); setRemoveKey(false); setDecisionsApiKey(""); setRemoveDecisionsKey(false); setNotice("Settings saved. Scheduling and startup preferences are active.");
+      onSaved(saved); setApiKey(""); setRemoveKey(false); setDecisionsApiKey(""); setRemoveDecisionsKey(false); setNotice("Settings and search configuration saved.");
     } catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
   };
@@ -52,7 +61,7 @@ export function SettingsPage({ initial, initialConfiguration, onSaved, onConfigu
       {error && <InlineNotice tone="error" title="Could not complete that action">{error}</InlineNotice>}
     </div>}
     <div className="settings-grid">
-      <SearchConfigurationSection initial={initialConfiguration} settings={settings} onSaved={onConfigurationSaved} />
+      <SearchConfigurationSection configuration={configuration} savedConfiguration={savedConfiguration} settings={settings} onChange={setConfiguration} />
       <SettingsSection icon={KeyRound} label="Bright Data" title="Search provider">
         <div className="form-grid">
           <Field label="Provider"><Select value={settings.provider} onChange={(event) => set("provider", event.target.value as SaveSettingsInput["provider"])}><option value="mock">Local mock provider</option><option value="bright_data">Bright Data SERP</option></Select></Field>

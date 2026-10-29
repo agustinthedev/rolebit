@@ -33,9 +33,10 @@ const settings: AppSettings = {
 };
 
 describe("SearchConfigurationSection", () => {
-  it("keeps the search plan visible without an ingestion action", () => {
-    render(<SearchConfigurationSection initial={configuration} settings={settings} onSaved={vi.fn()} />);
+  it("keeps the search plan visible without its own save or ingestion action", () => {
+    render(<SearchConfigurationSection configuration={configuration} savedConfiguration={configuration} settings={settings} onChange={vi.fn()} />);
     expect(screen.getByText("Planned requests")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Run ingestion" })).not.toBeInTheDocument();
   });
 });
