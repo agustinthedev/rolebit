@@ -522,7 +522,11 @@ impl Database {
         set_setting(
             &transaction,
             "include_roles_in_queries",
-            if config.include_roles { "true" } else { "false" },
+            if config.include_roles {
+                "true"
+            } else {
+                "false"
+            },
         )?;
         transaction.commit().map_err(|error| error.to_string())
     }

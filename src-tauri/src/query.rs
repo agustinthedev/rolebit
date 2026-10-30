@@ -149,11 +149,7 @@ pub fn generate_queries(config: &SearchConfiguration) -> Vec<String> {
     } else {
         Vec::new()
     };
-    let roles = if roles.is_empty() {
-        vec![None]
-    } else {
-        roles
-    };
+    let roles = if roles.is_empty() { vec![None] } else { roles };
     let mut seen = HashSet::new();
     let mut queries = Vec::new();
 
