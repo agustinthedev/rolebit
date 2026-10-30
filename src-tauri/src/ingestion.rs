@@ -14,7 +14,10 @@ use crate::{
     ats::SavedAtsBoard,
     ats_provider::{AtsClient, AtsFetchError},
     db::{Database, StoredDecision, UpsertOutcome},
-    decision::{DecisionsClient, PageDecision, decision_input_hash, matching_profile_hash},
+    decision::{
+        DecisionsClient, PageDecision, decision_input_hash, matching_input_hash,
+        matching_page_text, matching_profile_hash,
+    },
     extractor::{ExtractedPage, fetch_and_extract, mock_candidate},
     models::{AppSettings, CandidateJob, IngestionProgress, Profile},
     provider::{BrightDataProvider, SearchResponse, mock_results},
@@ -517,6 +520,7 @@ async fn process_query(
                                 decision.matching.as_ref(),
                                 decision.matching_error.as_deref(),
                                 decision.decision_input_hash.as_deref(),
+                                decision.matching_input_hash.as_deref(),
                                 decision.match_profile_hash.as_deref(),
                             )? {
                                 UpsertOutcome::New => {
@@ -711,6 +715,7 @@ async fn process_ats_board(
             decision.matching.as_ref(),
             decision.matching_error.as_deref(),
             decision.decision_input_hash.as_deref(),
+            decision.matching_input_hash.as_deref(),
             decision.match_profile_hash.as_deref(),
         );
         match outcome {
@@ -762,6 +767,7 @@ async fn score_verified_posting(
     profile: &Profile,
     stored: Option<StoredDecision>,
 ) -> Result<PageDecision, String> {
+    let matching_text = matching_page_text(candidate);
     let Some(client) = client else {
         return Ok(
             stored.map_or_else(PageDecision::local_job_posting, |stored| PageDecision {
@@ -770,19 +776,20 @@ async fn score_verified_posting(
                 matching: stored.matching,
                 matching_error: stored.match_error,
                 decision_input_hash: stored.decision_input_hash,
+                matching_input_hash: stored.matching_input_hash,
                 match_profile_hash: stored.match_profile_hash,
             }),
         );
     };
     let url = candidate.canonical_url.clone();
-    let input_hash = decision_input_hash(
-        candidate,
-        candidate.description.as_deref().unwrap_or_default(),
-    );
+    let input_hash = matching_input_hash(candidate, &matching_text);
     let profile_hash = matching_profile_hash(profile);
-    let content_unchanged = stored
+    let match_unchanged = stored
         .as_ref()
-        .is_some_and(|stored| stored.decision_input_hash.as_deref() == Some(input_hash.as_str()));
+        .is_some_and(|stored| stored.matching_input_hash.as_deref() == Some(input_hash.as_str()))
+        && stored.as_ref().is_some_and(|stored| {
+            stored.match_profile_hash.as_deref() == Some(profile_hash.as_str())
+        });
     let cache_key = format!("ats:{url}");
     let cell = {
         let mut cache = cache
@@ -795,36 +802,26 @@ async fn score_verified_posting(
     };
     let decision = cell
         .get_or_init(|| async {
-            let mut decision = if content_unchanged {
-                let stored = stored.as_ref().expect("unchanged decision exists");
-                PageDecision {
-                    category: "job_posting".into(),
-                    confidence: stored.classification_confidence,
-                    matching: stored.matching.clone(),
-                    matching_error: stored.match_error.clone(),
-                    decision_input_hash: Some(input_hash.clone()),
-                    match_profile_hash: stored.match_profile_hash.clone(),
-                }
-            } else {
-                PageDecision::local_job_posting()
-            };
-            decision.decision_input_hash = Some(input_hash.clone());
-            let match_unchanged = content_unchanged
-                && stored.as_ref().is_some_and(|stored| {
-                    stored.match_profile_hash.as_deref() == Some(profile_hash.as_str())
-                });
+            let mut decision =
+                stored
+                    .as_ref()
+                    .map_or_else(PageDecision::local_job_posting, |stored| PageDecision {
+                        category: "job_posting".into(),
+                        confidence: stored.classification_confidence,
+                        matching: stored.matching.clone(),
+                        matching_error: stored.match_error.clone(),
+                        decision_input_hash: stored.decision_input_hash.clone(),
+                        matching_input_hash: stored.matching_input_hash.clone(),
+                        match_profile_hash: stored.match_profile_hash.clone(),
+                    });
+            decision.matching_input_hash = Some(input_hash.clone());
             if match_unchanged {
                 return Ok(decision);
             }
+            decision.matching = None;
+            decision.matching_error = None;
             decision.match_profile_hash = Some(profile_hash.clone());
-            match client
-                .score_job(
-                    candidate,
-                    candidate.description.as_deref().unwrap_or_default(),
-                    profile,
-                )
-                .await
-            {
+            match client.score_job(candidate, &matching_text, profile).await {
                 Ok(matching) => decision.matching = matching,
                 Err(error) => decision.matching_error = Some(error),
             }
@@ -919,11 +916,13 @@ async fn decide_page(
         return Ok(PageDecision::local_job_posting());
     };
     let url = page.candidate.canonical_url.clone();
-    let input_hash = decision_input_hash(&page.candidate, &page.page_text);
+    let classification_input_hash = decision_input_hash(&page.candidate, &page.page_text);
+    let matching_text = matching_page_text(&page.candidate);
+    let matching_hash = matching_input_hash(&page.candidate, &matching_text);
     let profile_hash = matching_profile_hash(profile);
-    let content_unchanged = stored
-        .as_ref()
-        .is_some_and(|stored| stored.decision_input_hash.as_deref() == Some(input_hash.as_str()));
+    let classification_unchanged = stored.as_ref().is_some_and(|stored| {
+        stored.decision_input_hash.as_deref() == Some(classification_input_hash.as_str())
+    });
     let cell = {
         let mut cache = cache
             .lock()
@@ -935,33 +934,41 @@ async fn decide_page(
     };
     let decision = cell
         .get_or_init(|| async {
-            let mut decision = if content_unchanged {
+            let mut decision = if classification_unchanged {
                 let stored = stored.as_ref().expect("unchanged decision exists");
                 PageDecision {
                     category: "job_posting".into(),
                     confidence: stored.classification_confidence,
-                    matching: stored.matching.clone(),
-                    matching_error: stored.match_error.clone(),
-                    decision_input_hash: Some(input_hash.clone()),
-                    match_profile_hash: stored.match_profile_hash.clone(),
+                    matching: None,
+                    matching_error: None,
+                    decision_input_hash: Some(classification_input_hash.clone()),
+                    matching_input_hash: stored.matching_input_hash.clone(),
+                    match_profile_hash: None,
                 }
             } else {
                 client
                     .classify_page(&page.candidate, &page.page_text)
                     .await?
             };
-            decision.decision_input_hash = Some(input_hash.clone());
+            decision.decision_input_hash = Some(classification_input_hash.clone());
             if decision.is_job_posting() {
-                let match_unchanged = content_unchanged
-                    && stored.as_ref().is_some_and(|stored| {
-                        stored.match_profile_hash.as_deref() == Some(profile_hash.as_str())
-                    });
+                decision.matching_input_hash = Some(matching_hash.clone());
+                let match_unchanged = stored.as_ref().is_some_and(|stored| {
+                    stored.matching_input_hash.as_deref() == Some(matching_hash.as_str())
+                        && stored.match_profile_hash.as_deref() == Some(profile_hash.as_str())
+                });
                 if match_unchanged {
+                    let stored = stored.as_ref().expect("unchanged matching exists");
+                    decision.matching = stored.matching.clone();
+                    decision.matching_error = stored.match_error.clone();
+                    decision.match_profile_hash = stored.match_profile_hash.clone();
                     return Ok(decision);
                 }
+                decision.matching = None;
+                decision.matching_error = None;
                 decision.match_profile_hash = Some(profile_hash.clone());
                 match client
-                    .score_job(&page.candidate, &page.page_text, profile)
+                    .score_job(&page.candidate, &matching_text, profile)
                     .await
                 {
                     Ok(matching) => decision.matching = matching,
