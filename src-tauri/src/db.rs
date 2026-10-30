@@ -2045,7 +2045,7 @@ mod tests {
         let configuration = database.get_configuration().unwrap();
         assert_eq!(configuration.sites.len(), 3);
         assert_eq!(crate::query::generate_queries(&configuration).len(), 12);
-        assert_eq!(database.diagnostics("test").unwrap().schema_version, 8);
+        assert_eq!(database.diagnostics("test").unwrap().schema_version, 9);
         drop(database);
         fs::remove_dir_all(directory).unwrap();
     }
@@ -2073,7 +2073,7 @@ mod tests {
         drop(connection);
 
         let database = Database::initialize(path).unwrap();
-        assert_eq!(database.diagnostics("test").unwrap().schema_version, 8);
+        assert_eq!(database.diagnostics("test").unwrap().schema_version, 9);
         let connection = database.connect().unwrap();
         assert!(
             connection
