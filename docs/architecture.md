@@ -14,6 +14,7 @@ No localhost service or hosted database is involved.
 | `src-tauri/src/db.rs` | Migrations, repositories, FTS queries, transactions, upserts, and run telemetry |
 | `src-tauri/src/query.rs` | Site normalization and deterministic Cartesian query generation |
 | `src-tauri/src/provider.rs` | Bright Data adapter, retries, response parsing, and mock SERP results |
+| `src-tauri/src/ats_provider.rs` | Public Ashby, Greenhouse, Lever, and Workable board APIs and posting normalization |
 | `src-tauri/src/extractor.rs` | Public-URL validation, guarded redirects, JSON-LD, HTML fallback, and normalization |
 | `src-tauri/src/decision.rs` | OpenAI Decisions API page classification and privacy-filtered profile scoring |
 | `src-tauri/src/ingestion.rs` | Concurrency, cancellation, deduplication within a run, progress, and completion status |
@@ -47,7 +48,7 @@ Timestamps are persisted as UTC RFC 3339 strings. Pagination and filters execute
 
 ## Ingestion state
 
-Only one run may own the process-wide running flag. A run creates query executions concurrently up to the user setting. Each result URL is deduplicated within that run before extraction and page classification, then committed independently so one failed query does not discard other successful work.
+Only one run may own the process-wide running flag. A run creates search-query and saved-board executions concurrently up to the user setting. Bright Data results are deduplicated within that run before extraction and page classification. Saved ATS boards are fetched from their public posting APIs; their individual postings skip page classification and go directly to profile matching. Each discovery is committed independently so one failed query or board does not discard other successful work. The mock provider does not call saved-board APIs.
 
 The Rust extractor gathers evidence for every fetched HTML page without making a local job-versus-generic decision. SERP results and canonical URLs are not rejected by a local host/path check before classification. Decisions API classifies fetched pages as a specific posting, careers page, contact page, company page, or other, reusing saved decisions for known unchanged postings. Non-postings are recorded as filtered discoveries. Only a specific posting is sent for profile scoring; a scoring error is stored with the job, so it does not discard the posting. A changed profile reruns matching without repeating page classification.
 

@@ -10,6 +10,7 @@ Rolebit is a local-first Windows desktop application for discovering, collecting
 - Editable Sites and Locations lists with deterministic query previews.
 - Request-volume, monthly-usage, and user-configured cost estimates.
 - Bright Data SERP integration with localization, pagination, timeouts, retries, rate-limit handling, and cancellation.
+- Direct published-job ingestion from saved Ashby, Greenhouse, Lever, and Workable boards.
 - A zero-cost mock provider for development and product evaluation.
 - JSON-LD `JobPosting` extraction plus generic HTML page-evidence extraction.
 - Decisions API page classification for specific postings, careers pages, contact pages, company pages, and other results.
@@ -35,6 +36,7 @@ React UI
 Rust application core
   ├─ query generation
   ├─ Bright Data / mock search provider
+  ├─ public ATS job-board APIs for saved boards
   ├─ guarded page fetch and extraction
   ├─ normalization and transactional deduplication
   ├─ scheduler and system tray
@@ -84,9 +86,11 @@ The key is stored through Windows Credential Manager and is never written to SQL
 
 The initial integration calls `POST https://api.brightdata.com/request` with an encoded Google Search URL and `brd_json=1`. The adapter defensively accepts current structured-response shapes and records empty results separately from request failures.
 
+Each live Bright Data ingestion also reads previously saved employer boards and fetches their published postings from the corresponding public ATS API. Ashby, Greenhouse, Lever, and Workable responses are normalized into the same opportunity records, matched against the profile, deduplicated, and attributed to their ATS provider. Lever feeds are paginated and support both global and EU endpoints. Boards first discovered during a run are included in the next run. Mock ingestions stay local and do not call ATS APIs.
+
 ## Decisions API and profile matching
 
-Configure the OpenAI key in **Settings → Decisions API**. Bright Data ingestion requires this key: fetched pages are classified, and a page classified as one specific posting is sent in a second request for profile matching when professional profile details are available. Unchanged known postings reuse their saved decisions. The mock provider stays local and makes no OpenAI requests. Settings and manual connection tests warn that Decisions API requests may incur charges; saving settings does not start a run.
+Configure the OpenAI key in **Settings → Decisions API**. Bright Data search results require this key: fetched pages are classified, and a page classified as one specific posting is sent in a second request for profile matching when professional profile details are available. ATS API responses already represent individual published postings, so they skip page classification and go directly to profile matching. Unchanged known postings reuse their saved decisions. The mock provider stays local and makes no OpenAI requests. Settings and manual connection tests warn that Decisions API requests may incur charges; saving settings does not start a run.
 
 Classification uses the page title, extracted company or board, source domain, and up to 20,000 characters of page text. Matching runs only after a page is classified as one specific opening. It sends job-relevant professional details such as skills, work history, education, projects, languages, location, and work eligibility. Names, preferred names, contact details, street address, profile links, project URLs, and credential URLs are excluded. Each opportunity stores an overall fit score, confidence, and skill, experience, seniority, and location scores.
 
@@ -106,10 +110,11 @@ The preview shows exact queries, pages per query, planned search requests, recur
 
 ## Ingestion, extraction, and safety
 
-The pipeline is:
+The live ingestion uses two paths:
 
 ```text
-Configuration → Queries → SERP → Candidate URLs → Fetch → Extract → Decisions API classification → Profile match → Upsert → Dashboard
+Search configuration → Queries → Bright Data SERP → Candidate URLs → Fetch → Extract → Decisions API classification ─┐
+Saved ATS boards → Public ATS APIs → Normalize published postings ──────────────────────────────────────────────────┴→ Profile match → Upsert → Dashboard
 ```
 
 Candidate fetches allow HTTP/HTTPS only. Direct and DNS-resolved loopback, private, link-local, and local destinations are rejected. Redirects are followed manually and revalidated before each request. Rolebit does not bypass authentication, CAPTCHAs, or access controls and never executes downloaded scripts.
