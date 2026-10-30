@@ -7,6 +7,7 @@ use rusqlite::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::ats::{AtsType, SavedAtsBoard};
 use crate::models::{
     ActivityDay, AppSettings, CandidateJob, Diagnostics, IngestionRun, IngestionRunDetail,
     JobDetail, JobDiscovery, JobFacets, JobListRequest, JobPage, JobSummary, OpportunityMatch,
@@ -503,6 +504,35 @@ impl Database {
         })
     }
 
+    pub fn saved_ats_boards(&self) -> Result<Vec<SavedAtsBoard>, String> {
+        let connection = self.connect()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT ats_type, board_name, company_name FROM employer_boards
+                 ORDER BY ats_type, board_name",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| {
+                let ats_type: String = row.get(0)?;
+                let board_name: String = row.get(1)?;
+                let company_name: Option<String> = row.get(2)?;
+                Ok((ats_type, board_name, company_name))
+            })
+            .map_err(|error| error.to_string())?;
+        rows.map(|row| {
+            let (ats_type, board_name, company_name) = row.map_err(|error| error.to_string())?;
+            let ats_type = AtsType::parse(&ats_type)
+                .ok_or_else(|| format!("Unsupported saved ATS type: {ats_type}"))?;
+            Ok(SavedAtsBoard {
+                ats_type,
+                board_name,
+                company_name,
+            })
+        })
+        .collect()
+    }
+
     pub fn save_configuration(&self, config: &SearchConfiguration) -> Result<(), String> {
         let mut connection = self.connect()?;
         let transaction = connection
@@ -865,11 +895,18 @@ impl Database {
     }
 
     pub fn record_request_attempt(&self, run_id: i64) -> Result<(), String> {
+        self.record_request_attempts(run_id, 1)
+    }
+
+    pub fn record_request_attempts(&self, run_id: i64, count: usize) -> Result<(), String> {
+        if count == 0 {
+            return Ok(());
+        }
         let connection = self.connect()?;
         connection
             .execute(
-                "UPDATE ingestion_runs SET attempted_requests=attempted_requests+1 WHERE id=?1",
-                [run_id],
+                "UPDATE ingestion_runs SET attempted_requests=attempted_requests+?2 WHERE id=?1",
+                params![run_id, count as i64],
             )
             .map_err(|error| error.to_string())?;
         Ok(())
@@ -1227,8 +1264,8 @@ impl Database {
             "UPDATE ingestion_runs SET completed_at=?2, status=?3, error_summary=?4,
              successful_queries=(SELECT COUNT(*) FROM query_executions WHERE run_id=?1 AND status='completed'),
              failed_queries=(SELECT COUNT(*) FROM query_executions WHERE run_id=?1 AND status='failed'),
-             urls_discovered=(SELECT COUNT(*) FROM discovery_results WHERE run_id=?1),
-             filtered_results=(SELECT COUNT(*) FROM discovery_results WHERE run_id=?1 AND status='filtered'),
+             urls_discovered=(SELECT COALESCE(SUM(result_count),0) FROM query_executions WHERE run_id=?1),
+             filtered_results=(SELECT COALESCE(SUM(filtered_count),0) FROM query_executions WHERE run_id=?1),
              new_jobs=(SELECT COALESCE(SUM(new_jobs),0) FROM query_executions WHERE run_id=?1),
              updated_jobs=(SELECT COALESCE(SUM(updated_jobs),0) FROM query_executions WHERE run_id=?1),
              extraction_failures=(SELECT COUNT(*) FROM discovery_results WHERE run_id=?1 AND status='extraction_failed')

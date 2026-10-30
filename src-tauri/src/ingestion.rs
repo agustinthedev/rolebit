@@ -11,10 +11,12 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::OnceCell;
 
 use crate::{
+    ats::SavedAtsBoard,
+    ats_provider::{AtsClient, AtsFetchError},
     db::{Database, StoredDecision, UpsertOutcome},
     decision::{DecisionsClient, PageDecision, decision_input_hash, matching_profile_hash},
     extractor::{ExtractedPage, fetch_and_extract, mock_candidate},
-    models::{AppSettings, IngestionProgress, Profile},
+    models::{AppSettings, CandidateJob, IngestionProgress, Profile},
     provider::{BrightDataProvider, SearchResponse, mock_results},
     query::generate_queries,
     secret,
@@ -112,14 +114,26 @@ pub fn try_start_ingestion(app: AppHandle, state: AppState, trigger: &str) -> Re
             return Err(error);
         }
     };
-    if settings.provider == "bright_data" && !settings.has_decisions_api_key {
+    let queries = generate_queries(&configuration);
+    if settings.provider == "bright_data" && !queries.is_empty() && !settings.has_decisions_api_key
+    {
         state.release_run();
         return Err("OpenAI Decisions API key is not configured".into());
     }
-    let queries = generate_queries(&configuration);
-    if queries.is_empty() {
+    let boards = match if settings.provider == "bright_data" {
+        state.db.saved_ats_boards()
+    } else {
+        Ok(Vec::new())
+    } {
+        Ok(boards) => boards,
+        Err(error) => {
+            state.release_run();
+            return Err(error);
+        }
+    };
+    if queries.is_empty() && boards.is_empty() {
         state.release_run();
-        return Err("No valid enabled search combinations are configured".into());
+        return Err("No enabled search combinations or saved ATS boards are available".into());
     }
     let planned_requests = queries.len() * configuration.pages_per_query.max(1) as usize;
     if let Some(budget) = settings.request_budget
@@ -133,7 +147,8 @@ pub fn try_start_ingestion(app: AppHandle, state: AppState, trigger: &str) -> Re
     let estimated_cost = settings
         .estimated_cost_per_request
         .map(|cost| cost * planned_requests as f64);
-    let run_id = match state.db.start_run(trigger, queries.len(), estimated_cost) {
+    let total_tasks = queries.len() + boards.len();
+    let run_id = match state.db.start_run(trigger, total_tasks, estimated_cost) {
         Ok(id) => id,
         Err(error) => {
             state.release_run();
@@ -151,6 +166,7 @@ pub fn try_start_ingestion(app: AppHandle, state: AppState, trigger: &str) -> Re
             run_id,
             settings,
             queries,
+            boards,
             configuration.pages_per_query.max(1),
         )
         .await;
@@ -164,9 +180,16 @@ async fn execute(
     run_id: i64,
     settings: AppSettings,
     queries: Vec<String>,
+    boards: Vec<SavedAtsBoard>,
     pages: u32,
 ) {
-    let provider = match build_provider(&settings) {
+    let total = queries.len() + boards.len();
+    let provider_result = if queries.is_empty() {
+        Ok(Provider::Mock)
+    } else {
+        build_provider(&settings)
+    };
+    let provider = match provider_result {
         Ok(provider) => provider,
         Err(error) => {
             let _ = state.db.finish_run(run_id, "failed", Some(&error));
@@ -178,7 +201,7 @@ async fn execute(
                     status: "failed".into(),
                     current_query: None,
                     completed_queries: 0,
-                    total_queries: queries.len(),
+                    total_queries: total,
                     urls_discovered: 0,
                     new_jobs: 0,
                     updated_jobs: 0,
@@ -189,9 +212,8 @@ async fn execute(
             return;
         }
     };
-    let decisions_client = match &provider {
-        Provider::Mock => None,
-        Provider::Bright(_) => match secret::get_decisions_api_key().and_then(|key| {
+    let decisions_client = if settings.provider == "bright_data" && settings.has_decisions_api_key {
+        match secret::get_decisions_api_key().and_then(|key| {
             let key =
                 key.ok_or_else(|| "OpenAI Decisions API key is not configured".to_string())?;
             DecisionsClient::new(key, settings.request_timeout_seconds)
@@ -207,7 +229,7 @@ async fn execute(
                         status: "failed".into(),
                         current_query: None,
                         completed_queries: 0,
-                        total_queries: queries.len(),
+                        total_queries: total,
                         urls_discovered: 0,
                         new_jobs: 0,
                         updated_jobs: 0,
@@ -217,7 +239,9 @@ async fn execute(
                 );
                 return;
             }
-        },
+        }
+    } else {
+        None
     };
     let profile = match state.db.get_profile() {
         Ok(profile) => profile,
@@ -231,7 +255,7 @@ async fn execute(
                     status: "failed".into(),
                     current_query: None,
                     completed_queries: 0,
-                    total_queries: queries.len(),
+                    total_queries: total,
                     urls_discovered: 0,
                     new_jobs: 0,
                     updated_jobs: 0,
@@ -255,7 +279,7 @@ async fn execute(
     });
     let extraction_cache: ExtractionCache = Arc::new(Mutex::new(HashMap::new()));
     let decision_cache: DecisionCache = Arc::new(Mutex::new(HashMap::new()));
-    let total = queries.len();
+    let ats_decision_cache: DecisionCache = Arc::new(Mutex::new(HashMap::new()));
     emit_progress(&app, run_id, "running", None, total, &counters);
 
     stream::iter(queries)
@@ -310,6 +334,61 @@ async fn execute(
         })
         .await;
 
+    if !boards.is_empty() {
+        let ats_client = AtsClient::new(settings.request_timeout_seconds, settings.retry_count);
+        let ats_client_error = ats_client.as_ref().err().cloned();
+        let ats_client = ats_client.ok();
+        stream::iter(boards)
+            .for_each_concurrent(settings.request_concurrency.max(1) as usize, |board| {
+                let app = app.clone();
+                let state = state.clone();
+                let ats_client = ats_client.clone();
+                let ats_client_error = ats_client_error.clone();
+                let decisions_client = decisions_client.clone();
+                let profile = profile.clone();
+                let decision_cache = ats_decision_cache.clone();
+                let counters = counters.clone();
+                async move {
+                    if state.cancel.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    let label = board_execution_label(&board);
+                    emit_progress(&app, run_id, "running", Some(label), total, &counters);
+                    let result = process_ats_board(
+                        &state,
+                        run_id,
+                        &board,
+                        ats_client.as_ref(),
+                        ats_client_error.as_deref(),
+                        decisions_client.as_ref(),
+                        &profile,
+                        &decision_cache,
+                        &counters,
+                    )
+                    .await;
+                    match result {
+                        Ok(()) => {
+                            counters.successes.fetch_add(1, Ordering::SeqCst);
+                        }
+                        Err(_) => {
+                            counters.errors.fetch_add(1, Ordering::SeqCst);
+                            counters.query_failures.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                    counters.completed.fetch_add(1, Ordering::SeqCst);
+                    emit_progress(
+                        &app,
+                        run_id,
+                        "running",
+                        Some(board_execution_label(&board)),
+                        total,
+                        &counters,
+                    );
+                }
+            })
+            .await;
+    }
+
     let cancelled = state.cancel.load(Ordering::SeqCst);
     let errors = counters.errors.load(Ordering::SeqCst);
     let query_failures = counters.query_failures.load(Ordering::SeqCst);
@@ -328,7 +407,7 @@ async fn execute(
     let mut summary = Vec::new();
     if query_failures > 0 {
         summary.push(format!(
-            "{query_failures} search request{} failed",
+            "{query_failures} search or ATS request{} failed",
             if query_failures == 1 { "" } else { "s" }
         ));
     }
@@ -518,6 +597,260 @@ async fn process_query(
         new_jobs,
         updated_jobs,
         diagnostic.as_deref(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn process_ats_board(
+    state: &AppState,
+    run_id: i64,
+    board: &SavedAtsBoard,
+    client: Option<&AtsClient>,
+    client_error: Option<&str>,
+    decisions_client: Option<&DecisionsClient>,
+    profile: &Profile,
+    decision_cache: &DecisionCache,
+    counters: &Arc<Counters>,
+) -> Result<(), String> {
+    let label = board_execution_label(board);
+    let execution_id = state.db.start_query_execution(run_id, &label)?;
+    let response = match client {
+        Some(client) => client.fetch_board(board).await,
+        None => Err(AtsFetchError {
+            message: client_error
+                .unwrap_or("Could not initialize ATS API client")
+                .to_string(),
+            requests: 0,
+        }),
+    };
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            state.db.record_request_attempts(run_id, error.requests)?;
+            state.db.finish_query_execution(
+                execution_id,
+                "failed",
+                0,
+                0,
+                0,
+                0,
+                0,
+                Some(&error.message),
+            )?;
+            return Err(error.message);
+        }
+    };
+    state
+        .db
+        .record_request_attempts(run_id, response.requests)?;
+    counters
+        .urls
+        .fetch_add(response.result_count, Ordering::SeqCst);
+    counters
+        .filtered
+        .fetch_add(response.filtered_count, Ordering::SeqCst);
+    let result_count = response.result_count;
+    let filtered_count = response.filtered_count;
+    let mut candidate_count = 0;
+    let mut new_jobs = 0;
+    let mut updated_jobs = 0;
+    for candidate in response.jobs {
+        if state.cancel.load(Ordering::SeqCst) {
+            break;
+        }
+        candidate_count += 1;
+        let stored = match state.db.stored_decision(&candidate) {
+            Ok(stored) => stored,
+            Err(error) => {
+                state.db.finish_query_execution(
+                    execution_id,
+                    "failed",
+                    result_count,
+                    candidate_count,
+                    filtered_count,
+                    new_jobs,
+                    updated_jobs,
+                    Some(&error),
+                )?;
+                return Err(error);
+            }
+        };
+        let decision = match score_verified_posting(
+            decision_cache,
+            decisions_client,
+            &candidate,
+            profile,
+            stored,
+        )
+        .await
+        {
+            Ok(decision) => decision,
+            Err(error) => {
+                state.db.record_failed_discovery(
+                    run_id,
+                    execution_id,
+                    board.ats_type.provider_name(),
+                    &candidate.source_url,
+                    Some(&candidate.title),
+                    candidate.description.as_deref(),
+                    &error,
+                )?;
+                counters.errors.fetch_add(1, Ordering::SeqCst);
+                counters.extraction_failures.fetch_add(1, Ordering::SeqCst);
+                continue;
+            }
+        };
+        let outcome = state.db.record_candidate_with_decision_cache(
+            run_id,
+            execution_id,
+            board.ats_type.provider_name(),
+            Some(&candidate.title),
+            candidate.description.as_deref(),
+            &candidate,
+            decision.confidence,
+            decision.matching.as_ref(),
+            decision.matching_error.as_deref(),
+            decision.decision_input_hash.as_deref(),
+            decision.match_profile_hash.as_deref(),
+        );
+        match outcome {
+            Ok(UpsertOutcome::New) => {
+                new_jobs += 1;
+                counters.new_jobs.fetch_add(1, Ordering::SeqCst);
+            }
+            Ok(UpsertOutcome::Updated) => {
+                updated_jobs += 1;
+                counters.updated_jobs.fetch_add(1, Ordering::SeqCst);
+            }
+            Ok(UpsertOutcome::Existing) => {}
+            Err(error) => {
+                state.db.finish_query_execution(
+                    execution_id,
+                    "failed",
+                    result_count,
+                    candidate_count,
+                    filtered_count,
+                    new_jobs,
+                    updated_jobs,
+                    Some(&error),
+                )?;
+                return Err(error);
+            }
+        }
+    }
+    let status = if state.cancel.load(Ordering::SeqCst) {
+        "cancelled"
+    } else {
+        "completed"
+    };
+    state.db.finish_query_execution(
+        execution_id,
+        status,
+        result_count,
+        candidate_count,
+        filtered_count,
+        new_jobs,
+        updated_jobs,
+        None,
+    )
+}
+
+async fn score_verified_posting(
+    cache: &DecisionCache,
+    client: Option<&DecisionsClient>,
+    candidate: &CandidateJob,
+    profile: &Profile,
+    stored: Option<StoredDecision>,
+) -> Result<PageDecision, String> {
+    let Some(client) = client else {
+        return Ok(
+            stored.map_or_else(PageDecision::local_job_posting, |stored| PageDecision {
+                category: "job_posting".into(),
+                confidence: stored.classification_confidence,
+                matching: stored.matching,
+                matching_error: stored.match_error,
+                decision_input_hash: stored.decision_input_hash,
+                match_profile_hash: stored.match_profile_hash,
+            }),
+        );
+    };
+    let url = candidate.canonical_url.clone();
+    let input_hash = decision_input_hash(
+        candidate,
+        candidate.description.as_deref().unwrap_or_default(),
+    );
+    let profile_hash = matching_profile_hash(profile);
+    let content_unchanged = stored
+        .as_ref()
+        .is_some_and(|stored| stored.decision_input_hash.as_deref() == Some(input_hash.as_str()));
+    let cache_key = format!("ats:{url}");
+    let cell = {
+        let mut cache = cache
+            .lock()
+            .map_err(|_| "Decision cache unavailable".to_string())?;
+        cache
+            .entry(cache_key.clone())
+            .or_insert_with(|| Arc::new(OnceCell::new()))
+            .clone()
+    };
+    let decision = cell
+        .get_or_init(|| async {
+            let mut decision = if content_unchanged {
+                let stored = stored.as_ref().expect("unchanged decision exists");
+                PageDecision {
+                    category: "job_posting".into(),
+                    confidence: stored.classification_confidence,
+                    matching: stored.matching.clone(),
+                    matching_error: stored.match_error.clone(),
+                    decision_input_hash: Some(input_hash.clone()),
+                    match_profile_hash: stored.match_profile_hash.clone(),
+                }
+            } else {
+                PageDecision::local_job_posting()
+            };
+            decision.decision_input_hash = Some(input_hash.clone());
+            let match_unchanged = content_unchanged
+                && stored.as_ref().is_some_and(|stored| {
+                    stored.match_profile_hash.as_deref() == Some(profile_hash.as_str())
+                });
+            if match_unchanged {
+                return Ok(decision);
+            }
+            decision.match_profile_hash = Some(profile_hash.clone());
+            match client
+                .score_job(
+                    candidate,
+                    candidate.description.as_deref().unwrap_or_default(),
+                    profile,
+                )
+                .await
+            {
+                Ok(matching) => decision.matching = matching,
+                Err(error) => decision.matching_error = Some(error),
+            }
+            Ok(decision)
+        })
+        .await
+        .clone();
+    if decision.is_err() {
+        let mut cache = cache
+            .lock()
+            .map_err(|_| "Decision cache unavailable".to_string())?;
+        if cache
+            .get(&cache_key)
+            .is_some_and(|current| Arc::ptr_eq(current, &cell))
+        {
+            cache.remove(&cache_key);
+        }
+    }
+    decision
+}
+
+fn board_execution_label(board: &SavedAtsBoard) -> String {
+    format!(
+        "ATS board: {} / {}",
+        board.ats_type.display_name(),
+        board.board_name
     )
 }
 

@@ -395,7 +395,7 @@ fn canonical_url(document: &Html, source_url: &str) -> String {
     normalize_url(candidate, source_url).unwrap_or_else(|| source_url.to_string())
 }
 
-fn normalize_url(value: &str, base: &str) -> Option<String> {
+pub(crate) fn normalize_url(value: &str, base: &str) -> Option<String> {
     let base = Url::parse(base).ok()?;
     let mut url = base.join(value).ok()?;
     url.set_fragment(None);
@@ -516,7 +516,7 @@ fn value_to_text(value: &Value) -> Option<String> {
     })
 }
 
-fn strip_html(value: &str) -> String {
+pub(crate) fn strip_html(value: &str) -> String {
     let mut current = value.to_string();
     for _ in 0..3 {
         let fragment = Html::parse_fragment(&current);
@@ -635,7 +635,7 @@ fn normalize_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn infer_remote(value: &str) -> String {
+pub(crate) fn infer_remote(value: &str) -> String {
     let value = value.to_ascii_lowercase();
     if value.contains("hybrid") {
         "hybrid".into()

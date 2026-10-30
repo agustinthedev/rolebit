@@ -19,12 +19,47 @@ impl AtsType {
             Self::Workable => "workable",
         }
     }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "ashby" => Some(Self::Ashby),
+            "lever" => Some(Self::Lever),
+            "greenhouse" => Some(Self::Greenhouse),
+            "workable" => Some(Self::Workable),
+            _ => None,
+        }
+    }
+
+    pub fn provider_name(self) -> &'static str {
+        match self {
+            Self::Ashby => "ashby_api",
+            Self::Lever => "lever_api",
+            Self::Greenhouse => "greenhouse_api",
+            Self::Workable => "workable_api",
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Ashby => "Ashby",
+            Self::Lever => "Lever",
+            Self::Greenhouse => "Greenhouse",
+            Self::Workable => "Workable",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AtsBoard {
     pub ats_type: AtsType,
     pub board_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SavedAtsBoard {
+    pub ats_type: AtsType,
+    pub board_name: String,
+    pub company_name: Option<String>,
 }
 
 pub fn detect_ats_board(value: &str) -> Option<AtsBoard> {
