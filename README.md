@@ -7,7 +7,7 @@ Rolebit is a local-first Windows desktop application for discovering, collecting
 ## MVP capabilities
 
 - Six-step first-run onboarding with a persisted, non-secret local draft.
-- Editable Sites and Locations lists with deterministic query previews.
+- Editable Sites, Locations, and optional Roles lists with deterministic query previews.
 - Request-volume, monthly-usage, and user-configured cost estimates.
 - Bright Data SERP integration with localization, pagination, timeouts, retries, rate-limit handling, and cancellation.
 - A zero-cost mock provider for development and product evaluation.
@@ -94,13 +94,14 @@ Saved opportunities are analyzed when first discovered. Later ingestions reuse t
 
 ## Query generation and cost awareness
 
-For every enabled site and location, Rolebit generates:
+For every enabled site and location, Rolebit generates a query. When **Include roles in queries** is enabled, each enabled role is added as a quoted search term and produces its own query combination:
 
 ```text
 site:<site> "<location>"
+site:<site> "<location>" "<role>"
 ```
 
-The order is deterministic. Schemes and path suffixes are removed from site inputs, quoted terms are escaped, equivalent generated queries are deduplicated, and intentionally empty location values remain supported. Rolebit does not rewrite or optimize a strategy automatically.
+The order is deterministic. Schemes and path suffixes are removed from site inputs, quoted terms are escaped, equivalent generated queries are deduplicated, and intentionally empty location values remain supported. Role terms are excluded by default, preserving the previous query behavior until enabled. Rolebit does not rewrite or optimize a strategy automatically.
 
 The preview shows exact queries, pages per query, planned search requests, recurring monthly search usage, and estimated Bright Data cost using the user's own per-request estimate. Decisions API requests are additional and are billed by OpenAI. An optional request budget blocks an execution before any provider call if the search plan is too large.
 
