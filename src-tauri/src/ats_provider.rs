@@ -148,12 +148,19 @@ impl AtsClient {
         if matches!(&global, Ok(result) if !result.jobs.is_empty()) {
             return global;
         }
+        let global_requests = match &global {
+            Ok(result) => result.requests,
+            Err(error) => error.requests,
+        };
 
         match self
             .fetch_lever_from_host(board, "https://api.eu.lever.co")
             .await
         {
-            Ok(eu) if !eu.jobs.is_empty() => Ok(eu),
+            Ok(mut eu) if !eu.jobs.is_empty() => {
+                eu.requests += global_requests;
+                Ok(eu)
+            }
             Ok(mut eu) => match global {
                 Ok(mut global) => {
                     global.requests += eu.requests;
