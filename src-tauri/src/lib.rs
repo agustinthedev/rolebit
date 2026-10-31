@@ -1,4 +1,5 @@
 mod ats;
+mod ats_provider;
 mod commands;
 mod db;
 mod decision;

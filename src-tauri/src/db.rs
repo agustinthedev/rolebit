@@ -7,6 +7,7 @@ use rusqlite::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::ats::{AtsType, SavedAtsBoard};
 use crate::models::{
     ActivityDay, AppSettings, CandidateJob, Diagnostics, IngestionRun, IngestionRunDetail,
     JobDetail, JobDiscovery, JobFacets, JobListRequest, JobPage, JobSummary, OpportunityMatch,
@@ -319,6 +320,10 @@ ALTER TABLE jobs ADD COLUMN match_rationale TEXT;
 CREATE INDEX IF NOT EXISTS idx_jobs_match_score ON jobs(match_score DESC, first_seen_at DESC);
 "#;
 
+const MIGRATION_9: &str = r#"
+ALTER TABLE jobs ADD COLUMN matching_input_hash TEXT;
+"#;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpsertOutcome {
     New,
@@ -329,6 +334,7 @@ pub enum UpsertOutcome {
 #[derive(Debug, Clone)]
 pub struct StoredDecision {
     pub decision_input_hash: Option<String>,
+    pub matching_input_hash: Option<String>,
     pub match_profile_hash: Option<String>,
     pub classification_confidence: Option<f64>,
     pub matching: Option<OpportunityMatch>,
@@ -445,6 +451,17 @@ impl Database {
                 )
                 .map_err(|error| error.to_string())?;
         }
+        if current_version < 9 {
+            transaction
+                .execute_batch(MIGRATION_9)
+                .map_err(|error| error.to_string())?;
+            transaction
+                .execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES(9, ?1)",
+                    [now()],
+                )
+                .map_err(|error| error.to_string())?;
+        }
         seed_defaults(&transaction)?;
         transaction.commit().map_err(|error| error.to_string())?;
         Ok(database)
@@ -506,6 +523,35 @@ impl Database {
             include_roles,
             pages_per_query,
         })
+    }
+
+    pub fn saved_ats_boards(&self) -> Result<Vec<SavedAtsBoard>, String> {
+        let connection = self.connect()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT ats_type, board_name, company_name FROM employer_boards
+                 ORDER BY ats_type, board_name",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| {
+                let ats_type: String = row.get(0)?;
+                let board_name: String = row.get(1)?;
+                let company_name: Option<String> = row.get(2)?;
+                Ok((ats_type, board_name, company_name))
+            })
+            .map_err(|error| error.to_string())?;
+        rows.map(|row| {
+            let (ats_type, board_name, company_name) = row.map_err(|error| error.to_string())?;
+            let ats_type = AtsType::parse(&ats_type)
+                .ok_or_else(|| format!("Unsupported saved ATS type: {ats_type}"))?;
+            Ok(SavedAtsBoard {
+                ats_type,
+                board_name,
+                company_name,
+            })
+        })
+        .collect()
     }
 
     pub fn save_configuration(&self, config: &SearchConfiguration) -> Result<(), String> {
@@ -880,11 +926,18 @@ impl Database {
     }
 
     pub fn record_request_attempt(&self, run_id: i64) -> Result<(), String> {
+        self.record_request_attempts(run_id, 1)
+    }
+
+    pub fn record_request_attempts(&self, run_id: i64, count: usize) -> Result<(), String> {
+        if count == 0 {
+            return Ok(());
+        }
         let connection = self.connect()?;
         connection
             .execute(
-                "UPDATE ingestion_runs SET attempted_requests=attempted_requests+1 WHERE id=?1",
-                [run_id],
+                "UPDATE ingestion_runs SET attempted_requests=attempted_requests+?2 WHERE id=?1",
+                params![run_id, count as i64],
             )
             .map_err(|error| error.to_string())?;
         Ok(())
@@ -980,6 +1033,7 @@ impl Database {
         let row: Option<(
             Option<String>,
             Option<String>,
+            Option<String>,
             Option<f64>,
             Option<i64>,
             Option<f64>,
@@ -991,7 +1045,7 @@ impl Database {
             Option<String>,
         )> = connection
             .query_row(
-                "SELECT decision_input_hash, match_profile_hash, classification_confidence,
+                "SELECT decision_input_hash, matching_input_hash, match_profile_hash, classification_confidence,
                  match_score, match_confidence, skills_match, experience_match, seniority_match,
                  location_match, match_error, match_rationale FROM jobs
                  WHERE source_key=?1 OR canonical_url=?2 LIMIT 1",
@@ -1009,6 +1063,7 @@ impl Database {
                         row.get(8)?,
                         row.get(9)?,
                         row.get(10)?,
+                        row.get(11)?,
                     ))
                 },
             )
@@ -1017,6 +1072,7 @@ impl Database {
         Ok(row.map(
             |(
                 decision_input_hash,
+                matching_input_hash,
                 match_profile_hash,
                 classification_confidence,
                 overall,
@@ -1029,6 +1085,7 @@ impl Database {
                 rationale,
             )| StoredDecision {
                 decision_input_hash,
+                matching_input_hash,
                 match_profile_hash,
                 classification_confidence,
                 matching: overall.map(|overall| OpportunityMatch {
@@ -1069,6 +1126,7 @@ impl Database {
             match_error,
             None,
             None,
+            None,
         )
     }
 
@@ -1085,6 +1143,7 @@ impl Database {
         matching: Option<&OpportunityMatch>,
         match_error: Option<&str>,
         decision_input_hash: Option<&str>,
+        matching_input_hash: Option<&str>,
         match_profile_hash: Option<&str>,
     ) -> Result<UpsertOutcome, String> {
         let mut connection = self.connect()?;
@@ -1142,8 +1201,8 @@ impl Database {
                  content_updated=?17, reopened=?13, classification_confidence=?18,
                  match_score=?19, match_confidence=?20, skills_match=?21,
                  experience_match=?22, seniority_match=?23, location_match=?24,
-                 match_error=?25, decision_input_hash=?26, match_profile_hash=?27,
-                 match_rationale=?28 WHERE id=?1",
+                 match_error=?25, decision_input_hash=?26, matching_input_hash=?27,
+                 match_profile_hash=?28, match_rationale=?29 WHERE id=?1",
                 params![
                     job_id, candidate.canonical_url, candidate.external_id, candidate.source_domain,
                     candidate.title, candidate.company, candidate.description, candidate.location,
@@ -1155,6 +1214,7 @@ impl Database {
                     matching.and_then(|score| score.location),
                     match_error,
                     decision_input_hash,
+                    matching_input_hash,
                     match_profile_hash,
                     matching.and_then(|score| score.rationale.as_deref()),
                 ],
@@ -1173,9 +1233,10 @@ impl Database {
                  location, remote_status, employment_type, published_at, expires_at, lifecycle_status,
                  tracking_status, extraction_status, content_hash, first_seen_at, last_seen_at, updated_at,
                  classification_confidence, match_score, match_confidence, skills_match, experience_match,
-                 seniority_match, location_match, match_error, decision_input_hash, match_profile_hash, match_rationale)
+                 seniority_match, location_match, match_error, decision_input_hash, matching_input_hash,
+                 match_profile_hash, match_rationale)
                  VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'active', 'new', ?13, ?14, ?15, ?15, ?15,
-                 ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
+                 ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)",
                 params![
                     source_key, candidate.canonical_url, candidate.external_id, candidate.source_domain,
                     candidate.title, candidate.company, candidate.description, candidate.location,
@@ -1187,6 +1248,7 @@ impl Database {
                     matching.and_then(|score| score.location),
                     match_error,
                     decision_input_hash,
+                    matching_input_hash,
                     match_profile_hash,
                     matching.and_then(|score| score.rationale.as_deref()),
                 ],
@@ -1242,8 +1304,8 @@ impl Database {
             "UPDATE ingestion_runs SET completed_at=?2, status=?3, error_summary=?4,
              successful_queries=(SELECT COUNT(*) FROM query_executions WHERE run_id=?1 AND status='completed'),
              failed_queries=(SELECT COUNT(*) FROM query_executions WHERE run_id=?1 AND status='failed'),
-             urls_discovered=(SELECT COUNT(*) FROM discovery_results WHERE run_id=?1),
-             filtered_results=(SELECT COUNT(*) FROM discovery_results WHERE run_id=?1 AND status='filtered'),
+             urls_discovered=(SELECT COALESCE(SUM(result_count),0) FROM query_executions WHERE run_id=?1),
+             filtered_results=(SELECT COALESCE(SUM(filtered_count),0) FROM query_executions WHERE run_id=?1),
              new_jobs=(SELECT COALESCE(SUM(new_jobs),0) FROM query_executions WHERE run_id=?1),
              updated_jobs=(SELECT COALESCE(SUM(updated_jobs),0) FROM query_executions WHERE run_id=?1),
              extraction_failures=(SELECT COUNT(*) FROM discovery_results WHERE run_id=?1 AND status='extraction_failed')
@@ -1999,7 +2061,7 @@ mod tests {
         let configuration = database.get_configuration().unwrap();
         assert_eq!(configuration.sites.len(), 3);
         assert_eq!(crate::query::generate_queries(&configuration).len(), 12);
-        assert_eq!(database.diagnostics("test").unwrap().schema_version, 8);
+        assert_eq!(database.diagnostics("test").unwrap().schema_version, 9);
         drop(database);
         fs::remove_dir_all(directory).unwrap();
     }
@@ -2027,7 +2089,7 @@ mod tests {
         drop(connection);
 
         let database = Database::initialize(path).unwrap();
-        assert_eq!(database.diagnostics("test").unwrap().schema_version, 8);
+        assert_eq!(database.diagnostics("test").unwrap().schema_version, 9);
         let connection = database.connect().unwrap();
         assert!(
             connection
